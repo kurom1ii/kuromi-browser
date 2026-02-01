@@ -318,6 +318,14 @@ class TLSClient:
     def __exit__(self, *args: Any) -> None:
         self.close()
 
+    async def __aenter__(self) -> "TLSClient":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        self.close()
+
     # Async methods
     async def async_get(
         self,

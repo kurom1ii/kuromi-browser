@@ -98,6 +98,82 @@ class AudioProperties(BaseModel):
     state: str = "running"
     base_latency: float = 0.005
     output_latency: float = 0.0
+    noise_enabled: bool = True
+    noise_seed: Optional[int] = None
+
+
+class WebRTCProperties(BaseModel):
+    """WebRTC fingerprint properties and protection settings."""
+
+    enabled: bool = False  # False = block WebRTC entirely
+    public_ip: Optional[str] = None  # Fake public IP to expose
+    local_ip: Optional[str] = None  # Fake local IP
+    mode: str = "disable"  # "disable", "fake", "public_only"
+
+
+class WebGPUProperties(BaseModel):
+    """WebGPU fingerprint properties."""
+
+    noise_enabled: bool = True
+    noise_seed: Optional[int] = None
+    max_buffer_size_noise: int = 64  # Random reduction from max buffer size
+    max_storage_buffer_noise: int = 64
+
+
+class DomRectProperties(BaseModel):
+    """DomRect fingerprint noise settings."""
+
+    noise_enabled: bool = True
+    noise_seed: Optional[int] = None
+    noise_level: float = Field(default=1e-6, ge=0.0, le=1e-3)
+
+
+class FontProperties(BaseModel):
+    """Font fingerprint noise settings."""
+
+    noise_enabled: bool = True
+    noise_seed: Optional[int] = None
+    offset_noise_range: tuple[int, int] = (-1, 1)  # Pixel offset range
+
+
+class UserAgentDataProperties(BaseModel):
+    """Client Hints (navigator.userAgentData) properties."""
+
+    brands: list[dict[str, str]] = Field(default_factory=lambda: [
+        {"brand": "Chromium", "version": "120"},
+        {"brand": "Not(A:Brand", "version": "24"},
+        {"brand": "Google Chrome", "version": "120"},
+    ])
+    mobile: bool = False
+    platform: str = "Linux"
+    platform_version: str = "6.5.0"
+    architecture: str = "x86"
+    bitness: str = "64"
+    model: str = ""
+    ua_full_version: str = "120.0.0.0"
+    full_version_list: list[dict[str, str]] = Field(default_factory=lambda: [
+        {"brand": "Chromium", "version": "120.0.6099.129"},
+        {"brand": "Not(A:Brand", "version": "24.0.0.0"},
+        {"brand": "Google Chrome", "version": "120.0.6099.129"},
+    ])
+    wow64: bool = False
+
+
+class BatteryProperties(BaseModel):
+    """Battery API fingerprint properties."""
+
+    charging: bool = True
+    charging_time: Optional[float] = None
+    discharging_time: Optional[float] = None
+    level: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class MultimediaDevicesProperties(BaseModel):
+    """Multimedia devices fingerprint properties."""
+
+    webcams: int = Field(default=1, ge=0, le=5)
+    microphones: int = Field(default=1, ge=0, le=5)
+    speakers: int = Field(default=1, ge=0, le=5)
 
 
 class CanvasProperties(BaseModel):
@@ -112,6 +188,7 @@ class Fingerprint(BaseModel):
     """Complete browser fingerprint profile.
 
     Contains all the properties needed to spoof a consistent browser identity.
+    Inspired by my-fingerprint, browserforge, and camoufox techniques.
     """
 
     user_agent: str = Field(
@@ -125,9 +202,23 @@ class Fingerprint(BaseModel):
     audio: AudioProperties = Field(default_factory=AudioProperties)
     canvas: CanvasProperties = Field(default_factory=CanvasProperties)
 
+    # New fingerprint properties from my-fingerprint and browserforge
+    webrtc: WebRTCProperties = Field(default_factory=WebRTCProperties)
+    webgpu: WebGPUProperties = Field(default_factory=WebGPUProperties)
+    dom_rect: DomRectProperties = Field(default_factory=DomRectProperties)
+    font_fp: FontProperties = Field(default_factory=FontProperties)
+    user_agent_data: UserAgentDataProperties = Field(default_factory=UserAgentDataProperties)
+    battery: BatteryProperties = Field(default_factory=BatteryProperties)
+    multimedia_devices: MultimediaDevicesProperties = Field(
+        default_factory=MultimediaDevicesProperties
+    )
+
     timezone: str = "America/New_York"
     timezone_offset: int = -300
     locale: str = "en-US"
+
+    # Global seed for consistent fingerprint generation
+    global_seed: Optional[int] = None
 
     fonts: list[str] = Field(
         default_factory=lambda: [
@@ -152,6 +243,20 @@ class Fingerprint(BaseModel):
             {"name": "WebKit built-in PDF", "filename": "internal-pdf-viewer"},
         ]
     )
+
+    # Video/Audio codec support (from browserforge)
+    video_codecs: dict[str, str] = Field(default_factory=lambda: {
+        "h264": "probably",
+        "ogg": "",
+        "webm": "probably",
+    })
+    audio_codecs: dict[str, str] = Field(default_factory=lambda: {
+        "aac": "probably",
+        "m4a": "maybe",
+        "mp3": "probably",
+        "ogg": "probably",
+        "wav": "probably",
+    })
 
     @property
     def platform(self) -> str:
@@ -184,28 +289,131 @@ class Fingerprint(BaseModel):
         return self.webgl.renderer
 
 
+class ProxyType(str, Enum):
+    """Supported proxy types."""
+
+    HTTP = "http"
+    HTTPS = "https"
+    SOCKS4 = "socks4"
+    SOCKS5 = "socks5"
+
+
 class ProxyConfig(BaseModel):
-    """Proxy configuration."""
+    """Proxy configuration with support for HTTP, HTTPS, SOCKS4, and SOCKS5."""
 
     server: str
     username: Optional[str] = None
     password: Optional[str] = None
     bypass: list[str] = Field(default_factory=list)
+    proxy_type: ProxyType = ProxyType.HTTP
 
     @classmethod
     def from_url(cls, url: str) -> "ProxyConfig":
-        """Parse proxy from URL format (http://user:pass@host:port)."""
+        """Parse proxy from URL format.
+
+        Supported formats:
+        - http://host:port
+        - http://user:pass@host:port
+        - https://host:port
+        - socks5://host:port
+        - socks5://user:pass@host:port
+        - socks4://host:port
+        """
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
-        server = f"{parsed.scheme}://{parsed.hostname}"
+        scheme = parsed.scheme.lower()
+
+        # Determine proxy type
+        if scheme in ("socks5", "socks5h"):
+            proxy_type = ProxyType.SOCKS5
+        elif scheme == "socks4":
+            proxy_type = ProxyType.SOCKS4
+        elif scheme == "https":
+            proxy_type = ProxyType.HTTPS
+        else:
+            proxy_type = ProxyType.HTTP
+
+        # Build server URL
+        server = f"{scheme}://{parsed.hostname}"
         if parsed.port:
             server += f":{parsed.port}"
+
         return cls(
             server=server,
             username=parsed.username,
             password=parsed.password,
+            proxy_type=proxy_type,
         )
+
+    def to_url(self, include_auth: bool = True) -> str:
+        """Convert proxy config to URL format.
+
+        Args:
+            include_auth: Whether to include username/password in URL.
+
+        Returns:
+            Proxy URL string.
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self.server)
+        scheme = parsed.scheme or self.proxy_type.value
+        host = parsed.hostname or ""
+        port = parsed.port
+
+        if include_auth and self.username:
+            auth = self.username
+            if self.password:
+                auth += f":{self.password}"
+            auth += "@"
+        else:
+            auth = ""
+
+        url = f"{scheme}://{auth}{host}"
+        if port:
+            url += f":{port}"
+
+        return url
+
+    def to_curl_cffi_proxy(self) -> dict[str, str]:
+        """Convert to curl_cffi proxy format.
+
+        Returns:
+            Dict with 'http' and 'https' keys for curl_cffi.
+        """
+        url = self.to_url(include_auth=True)
+        return {"http": url, "https": url}
+
+    def to_httpx_proxy(self) -> str:
+        """Convert to httpx proxy format.
+
+        Returns:
+            Proxy URL string for httpx.
+        """
+        return self.to_url(include_auth=True)
+
+    def to_chromium_arg(self) -> str:
+        """Convert to Chromium --proxy-server argument.
+
+        Note: Chromium doesn't support SOCKS5 auth via command line.
+        For authenticated SOCKS5, use a local proxy forwarder.
+
+        Returns:
+            Proxy server argument for Chromium.
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self.server)
+        host = parsed.hostname or ""
+        port = parsed.port
+
+        if self.proxy_type in (ProxyType.SOCKS4, ProxyType.SOCKS5):
+            # Chromium uses socks5:// format
+            scheme = "socks5" if self.proxy_type == ProxyType.SOCKS5 else "socks4"
+            return f"{scheme}://{host}:{port}" if port else f"{scheme}://{host}"
+        else:
+            return self.server
 
 
 class BrowserConfig(BaseModel):

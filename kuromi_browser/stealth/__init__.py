@@ -7,6 +7,11 @@ This module provides anti-detection and fingerprint spoofing capabilities:
 - HumanMouse: Human-like mouse movement simulation
 - HumanKeyboard: Human-like keyboard input simulation
 - TLSClient: TLS fingerprint impersonation using curl_cffi
+
+Enhanced with techniques from:
+- my-fingerprint: WebRTC, WebGPU, DomRect, Font, UserAgentData patches
+- browserforge: Bayesian network fingerprint generation, codec spoofing
+- camoufox: Advanced stealth techniques and consistency validation
 """
 
 from typing import Any, Optional
@@ -21,9 +26,24 @@ from kuromi_browser.stealth.fingerprint import (
     USER_AGENTS,
     WEBGL_RENDERERS,
     TIMEZONES,
+    FONTS_BY_OS,
+    CHROME_PLUGINS,
 )
-from kuromi_browser.stealth.behavior import HumanMouse, MousePath, HumanKeyboard
-from kuromi_browser.stealth.tls import TLSClient, TLSConfig
+
+# Try to import optional behavior modules
+try:
+    from kuromi_browser.stealth.behavior import HumanMouse, MousePath, HumanKeyboard
+except ImportError:
+    HumanMouse = None  # type: ignore
+    MousePath = None  # type: ignore
+    HumanKeyboard = None  # type: ignore
+
+# Try to import optional TLS module
+try:
+    from kuromi_browser.stealth.tls import TLSClient, TLSConfig
+except ImportError:
+    TLSClient = None  # type: ignore
+    TLSConfig = None  # type: ignore
 
 
 class StealthConfig:
@@ -224,11 +244,11 @@ __all__ = [
     "FingerprintGenerator",
     # CDP Patches
     "CDPPatches",
-    # Behavior simulation
+    # Behavior simulation (optional)
     "HumanMouse",
     "MousePath",
     "HumanKeyboard",
-    # TLS impersonation
+    # TLS impersonation (optional)
     "TLSClient",
     "TLSConfig",
     # Data constants
@@ -236,6 +256,8 @@ __all__ = [
     "USER_AGENTS",
     "WEBGL_RENDERERS",
     "TIMEZONES",
+    "FONTS_BY_OS",
+    "CHROME_PLUGINS",
     # Functions
     "apply_stealth",
     "apply_stealth_basic",

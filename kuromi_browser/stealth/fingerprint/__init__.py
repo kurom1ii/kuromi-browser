@@ -7,16 +7,24 @@ from real browser populations. Supports browserforge integration.
 
 import hashlib
 import random
+import secrets
 import string
 from typing import Any, Optional
 
 from kuromi_browser.models import (
     AudioProperties,
+    BatteryProperties,
     CanvasProperties,
+    DomRectProperties,
     Fingerprint,
+    FontProperties,
+    MultimediaDevicesProperties,
     NavigatorProperties,
     ScreenProperties,
+    UserAgentDataProperties,
     WebGLProperties,
+    WebGPUProperties,
+    WebRTCProperties,
 )
 
 
@@ -166,8 +174,11 @@ def _weighted_choice(choices: list[tuple[Any, float]]) -> Any:
 
 
 def _generate_canvas_noise_seed() -> int:
-    """Generate a random seed for canvas noise."""
-    return random.randint(1, 2**31 - 1)
+    """Generate a cryptographically secure random seed for canvas noise.
+
+    Uses secrets module for better entropy than random.randint.
+    """
+    return secrets.randbelow(2**31 - 1) + 1
 
 
 def _generate_audio_context_hash(seed: Optional[int] = None) -> float:
@@ -286,6 +297,8 @@ class FingerprintGenerator:
         audio = AudioProperties(
             sample_rate=44100,
             max_channel_count=2,
+            noise_enabled=True,
+            noise_seed=_generate_canvas_noise_seed(),
         )
 
         # Build canvas properties
@@ -295,6 +308,75 @@ class FingerprintGenerator:
             noise_level=0.1,
         )
 
+        # Build new fingerprint properties (from my-fingerprint/browserforge)
+        global_seed = _generate_canvas_noise_seed()
+
+        # WebRTC - disabled by default for privacy
+        webrtc = WebRTCProperties(
+            enabled=False,
+            mode="disable",
+        )
+
+        # WebGPU noise
+        webgpu = WebGPUProperties(
+            noise_enabled=True,
+            noise_seed=global_seed,
+        )
+
+        # DomRect noise
+        dom_rect = DomRectProperties(
+            noise_enabled=True,
+            noise_seed=global_seed,
+        )
+
+        # Font noise
+        font_fp = FontProperties(
+            noise_enabled=True,
+            noise_seed=global_seed,
+        )
+
+        # UserAgentData based on browser version
+        chrome_version = "120"
+        if "Chrome/" in user_agent:
+            import re
+            match = re.search(r"Chrome/(\d+)", user_agent)
+            if match:
+                chrome_version = match.group(1)
+
+        user_agent_data = UserAgentDataProperties(
+            brands=[
+                {"brand": "Chromium", "version": chrome_version},
+                {"brand": "Not(A:Brand", "version": "24"},
+                {"brand": "Google Chrome", "version": chrome_version},
+            ],
+            mobile=device != "desktop",
+            platform=os.capitalize() if os.lower() != "macos" else "macOS",
+            platform_version="10.0.0" if os.lower() == "windows" else "6.5.0",
+            architecture="x86" if os.lower() != "macos" else "arm",
+            bitness="64",
+            ua_full_version=f"{chrome_version}.0.0.0",
+            full_version_list=[
+                {"brand": "Chromium", "version": f"{chrome_version}.0.6099.129"},
+                {"brand": "Not(A:Brand", "version": "24.0.0.0"},
+                {"brand": "Google Chrome", "version": f"{chrome_version}.0.6099.129"},
+            ],
+        )
+
+        # Battery (randomized but realistic)
+        battery = BatteryProperties(
+            charging=random.choice([True, False]),
+            charging_time=None if random.random() > 0.5 else random.randint(1800, 7200),
+            discharging_time=random.randint(7200, 36000) if random.random() > 0.5 else None,
+            level=round(random.uniform(0.2, 1.0), 2),
+        )
+
+        # Multimedia devices (typical desktop setup)
+        multimedia_devices = MultimediaDevicesProperties(
+            webcams=1,
+            microphones=1,
+            speakers=random.choice([1, 2]),
+        )
+
         return Fingerprint(
             user_agent=user_agent,
             navigator=navigator,
@@ -302,11 +384,19 @@ class FingerprintGenerator:
             webgl=webgl,
             audio=audio,
             canvas=canvas,
+            webrtc=webrtc,
+            webgpu=webgpu,
+            dom_rect=dom_rect,
+            font_fp=font_fp,
+            user_agent_data=user_agent_data,
+            battery=battery,
+            multimedia_devices=multimedia_devices,
             timezone=timezone,
             timezone_offset=timezone_offset,
             locale=locale,
             fonts=fonts,
             plugins=CHROME_PLUGINS if browser.lower() in ("chrome", "edge") else [],
+            global_seed=global_seed,
         )
 
     @staticmethod
@@ -328,17 +418,37 @@ class FingerprintGenerator:
         return FingerprintGenerator.generate(seed=seed, **kwargs)
 
     @staticmethod
-    def from_browserforge() -> Fingerprint:
+    def from_browserforge(
+        *,
+        browser: str = "chrome",
+        os: str = "linux",
+        screen_min_width: Optional[int] = None,
+        screen_max_width: Optional[int] = None,
+        screen_min_height: Optional[int] = None,
+        screen_max_height: Optional[int] = None,
+    ) -> Fingerprint:
         """Generate fingerprint using browserforge library.
+
+        Uses Bayesian network to generate realistic fingerprints matching
+        real browser population distribution.
 
         Requires browserforge to be installed:
             pip install browserforge
 
+        Args:
+            browser: Browser type to generate for
+            os: Operating system to generate for
+            screen_min_width: Minimum screen width constraint
+            screen_max_width: Maximum screen width constraint
+            screen_min_height: Minimum screen height constraint
+            screen_max_height: Maximum screen height constraint
+
         Returns:
-            A Fingerprint generated by browserforge
+            A Fingerprint generated by browserforge with all new properties
         """
         try:
             from browserforge.fingerprints import FingerprintGenerator as BFGenerator
+            from browserforge.fingerprints import Screen
             from browserforge.headers import HeaderGenerator
         except ImportError:
             raise ImportError(
@@ -346,13 +456,27 @@ class FingerprintGenerator:
                 "Install it with: pip install browserforge"
             )
 
+        # Set up screen constraints if provided
+        screen_kwargs = {}
+        if any([screen_min_width, screen_max_width, screen_min_height, screen_max_height]):
+            screen = Screen(
+                min_width=screen_min_width,
+                max_width=screen_max_width,
+                min_height=screen_min_height,
+                max_height=screen_max_height,
+            )
+            screen_kwargs["screen"] = screen
+
         # Generate fingerprint using browserforge
-        fg = BFGenerator()
+        fg = BFGenerator(browser=browser, os=os, **screen_kwargs)
         bf_fp = fg.generate()
 
         # Generate headers
-        hg = HeaderGenerator()
+        hg = HeaderGenerator(browser=browser, os=os)
         headers = hg.generate()
+
+        # Generate global seed
+        global_seed = _generate_canvas_noise_seed()
 
         # Convert to our Fingerprint model
         navigator = NavigatorProperties(
@@ -372,18 +496,79 @@ class FingerprintGenerator:
             avail_height=bf_fp.screen.availHeight,
             color_depth=bf_fp.screen.colorDepth,
             pixel_depth=bf_fp.screen.pixelDepth,
+            device_pixel_ratio=getattr(bf_fp.screen, "devicePixelRatio", 1.0),
         )
 
         webgl = WebGLProperties(
-            vendor=bf_fp.videoCard.vendor if bf_fp.videoCard else None,
+            vendor=bf_fp.videoCard.vendor if bf_fp.videoCard else "Google Inc.",
             renderer=bf_fp.videoCard.renderer if bf_fp.videoCard else None,
         )
 
+        audio = AudioProperties(
+            sample_rate=44100,
+            max_channel_count=2,
+            noise_enabled=True,
+            noise_seed=global_seed,
+        )
+
+        canvas = CanvasProperties(
+            noise_enabled=True,
+            noise_seed=global_seed,
+        )
+
+        # New properties
+        webrtc = WebRTCProperties(enabled=False, mode="disable")
+        webgpu = WebGPUProperties(noise_enabled=True, noise_seed=global_seed)
+        dom_rect = DomRectProperties(noise_enabled=True, noise_seed=global_seed)
+        font_fp = FontProperties(noise_enabled=True, noise_seed=global_seed)
+
+        # UserAgentData from browserforge
+        ua_data = getattr(bf_fp.navigator, "userAgentData", None)
+        user_agent_data = UserAgentDataProperties(
+            brands=ua_data.get("brands", []) if ua_data else [],
+            mobile=ua_data.get("mobile", False) if ua_data else False,
+            platform=ua_data.get("platform", bf_fp.navigator.platform) if ua_data else bf_fp.navigator.platform,
+        )
+
+        # Battery from browserforge
+        bf_battery = getattr(bf_fp, "battery", None)
+        battery = BatteryProperties(
+            charging=bf_battery.get("charging", True) if bf_battery else True,
+            charging_time=bf_battery.get("chargingTime") if bf_battery else None,
+            discharging_time=bf_battery.get("dischargingTime") if bf_battery else None,
+            level=bf_battery.get("level", 1.0) if bf_battery else 1.0,
+        )
+
+        # Multimedia devices from browserforge
+        bf_devices = getattr(bf_fp, "multimediaDevices", None)
+        multimedia_devices = MultimediaDevicesProperties(
+            webcams=len(bf_devices.get("webcams", [])) if bf_devices else 1,
+            microphones=len(bf_devices.get("micros", [])) if bf_devices else 1,
+            speakers=len(bf_devices.get("speakers", [])) if bf_devices else 1,
+        )
+
+        # Video/Audio codecs from browserforge
+        video_codecs = getattr(bf_fp, "videoCodecs", {"h264": "probably", "ogg": "", "webm": "probably"})
+        audio_codecs = getattr(bf_fp, "audioCodecs", {"aac": "probably", "mp3": "probably", "ogg": "probably", "wav": "probably"})
+
         return Fingerprint(
-            user_agent=headers.get("User-Agent", ""),
+            user_agent=headers.get("User-Agent", bf_fp.navigator.userAgent),
             navigator=navigator,
             screen=screen,
             webgl=webgl,
+            audio=audio,
+            canvas=canvas,
+            webrtc=webrtc,
+            webgpu=webgpu,
+            dom_rect=dom_rect,
+            font_fp=font_fp,
+            user_agent_data=user_agent_data,
+            battery=battery,
+            multimedia_devices=multimedia_devices,
+            fonts=getattr(bf_fp, "fonts", []),
+            video_codecs=video_codecs,
+            audio_codecs=audio_codecs,
+            global_seed=global_seed,
         )
 
     @staticmethod
@@ -391,7 +576,7 @@ class FingerprintGenerator:
         """Validate fingerprint consistency, return list of issues.
 
         Checks for common inconsistencies that could be detected
-        by anti-bot systems.
+        by anti-bot systems. Based on checks from camoufox and my-fingerprint.
 
         Args:
             fingerprint: The fingerprint to validate
@@ -452,10 +637,37 @@ class FingerprintGenerator:
                 f"Unusual device_memory value: {fingerprint.navigator.device_memory}"
             )
 
-        # Touch points check for desktop
-        if "mobile" not in ua.lower() and fingerprint.navigator.max_touch_points > 0:
-            # This is actually okay for some laptops with touchscreens
-            pass
+        # UserAgentData consistency check (new from my-fingerprint)
+        if fingerprint.user_agent_data:
+            ua_platform = fingerprint.user_agent_data.platform.lower()
+            nav_platform = fingerprint.navigator.platform.lower()
+
+            # Check platform consistency
+            if "win" in ua_platform and "win" not in nav_platform:
+                issues.append(
+                    f"UserAgentData platform mismatch: '{fingerprint.user_agent_data.platform}' vs navigator '{fingerprint.navigator.platform}'"
+                )
+
+            # Check mobile consistency
+            if fingerprint.user_agent_data.mobile and fingerprint.navigator.max_touch_points == 0:
+                issues.append(
+                    "Mobile mismatch: userAgentData.mobile=true but maxTouchPoints=0"
+                )
+
+        # Battery consistency check (new)
+        if fingerprint.battery:
+            if fingerprint.battery.level > 1.0 or fingerprint.battery.level < 0:
+                issues.append(
+                    f"Invalid battery level: {fingerprint.battery.level}"
+                )
+
+        # WebGL vendor/renderer consistency
+        if fingerprint.webgl.renderer:
+            renderer = fingerprint.webgl.renderer.lower()
+            if "nvidia" in renderer and "macos" in fingerprint.navigator.platform.lower():
+                issues.append(
+                    "GPU mismatch: NVIDIA renderer on macOS (Apple Silicon Macs don't use NVIDIA)"
+                )
 
         return issues
 
@@ -466,4 +678,6 @@ __all__ = [
     "USER_AGENTS",
     "WEBGL_RENDERERS",
     "TIMEZONES",
+    "FONTS_BY_OS",
+    "CHROME_PLUGINS",
 ]

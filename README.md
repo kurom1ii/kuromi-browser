@@ -13,6 +13,8 @@
 - **Simple API**: DrissionPage-style syntax for ease of use
 - **Async-First**: Native async/await support
 - **Event-Driven**: Extensible watchdog system
+- **Proxy Support**: HTTP, HTTPS, SOCKS4, SOCKS5 with authentication
+- **MCP Server**: Model Context Protocol for AI agent integration
 
 ## 🚀 Quick Start
 
@@ -56,6 +58,49 @@ page.browser.get('https://example.com')
 page.browser.ele('#submit').click()
 ```
 
+### Proxy Support (HTTP, HTTPS, SOCKS4, SOCKS5)
+```python
+from kuromi_browser import Browser, BrowserConfig, ProxyConfig
+
+# Simple proxy URL
+config = BrowserConfig(proxy="http://proxy.example.com:8080")
+
+# SOCKS5 with authentication
+config = BrowserConfig(proxy="socks5://user:pass@127.0.0.1:1080")
+
+# ProxyConfig for more control
+proxy = ProxyConfig.from_url("socks5://user:pass@socks.example.com:1080")
+print(proxy.proxy_type)  # ProxyType.SOCKS5
+print(proxy.to_chromium_arg())  # socks5://socks.example.com:1080
+
+# Use in session mode
+from kuromi_browser.session import Session
+session = Session(proxy="http://user:pass@proxy.com:8080")
+```
+
+### MCP Server (for AI Agents)
+```python
+# Run as MCP server for Claude, GPT, etc.
+python -m kuromi_browser.mcp
+
+# Or integrate programmatically
+from kuromi_browser.mcp import BrowserMCPServer
+server = BrowserMCPServer()
+await server.start()
+```
+
+MCP config example (`~/.config/claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "kuromi-browser": {
+      "command": "python",
+      "args": ["-m", "kuromi_browser.mcp"]
+    }
+  }
+}
+```
+
 ## 📦 Installation
 
 ```bash
@@ -78,7 +123,8 @@ kuromi_browser/
 │   ├── fingerprint/  # Fingerprint generator
 │   ├── behavior/  # Human-like actions
 │   └── tls/       # TLS/JA3 impersonation
-└── network/       # Network monitoring
+├── network/       # Network monitoring
+└── mcp/           # Model Context Protocol server
 ```
 
 ## 🛡️ Anti-Detection Features
@@ -106,10 +152,17 @@ kuromi_browser/
 
 ## 📚 Documentation
 
+### English
 - [Getting Started](docs/getting-started.md)
 - [API Reference](docs/api-reference.md)
 - [Stealth Guide](docs/stealth-guide.md)
-- [AI Agent Guide](docs/agent-guide.md)
+- [Architecture](docs/architecture.md)
+
+### Tieng Viet
+- [Tai lieu tieng Viet](docs/README.vi.md) - Tong quan tieng Viet
+- [Huong dan bat dau](docs/getting-started.md) - Cai dat va su dung
+- [Kien truc project](docs/architecture.md) - Cau truc va thiet ke
+- [Huong dan Stealth](docs/stealth-guide.md) - Chong phat hien bot
 
 ## 🔗 References
 

@@ -493,9 +493,535 @@ TIMEZONE_PATCH = """
 })({timezone}, {offset});
 """
 
+# ============================================================================
+# NEW PATCHES FROM MY-FINGERPRINT AND BROWSERFORGE
+# ============================================================================
+
+# Seeded random function for consistent fingerprint noise (from my-fingerprint)
+SEEDED_RANDOM_PATCH = """
+((globalSeed) => {
+    window.__fp_seededRandom = function(seed, max = 1, min = 0) {
+        const s = Math.sin(seed) * 10000;
+        const r = s - Math.floor(s);
+        return min + r * (max - min);
+    };
+    window.__fp_globalSeed = globalSeed;
+})({global_seed});
+"""
+
+# WebRTC protection (from my-fingerprint) - blocks WebRTC to prevent IP leak
+WEBRTC_DISABLE_PATCH = """
+(() => {
+    // Remove WebRTC APIs entirely
+    const webrtcKeys = [
+        'RTCDataChannel',
+        'RTCIceCandidate',
+        'RTCConfiguration',
+        'MediaStreamTrack',
+        'RTCPeerConnection',
+        'RTCSessionDescription',
+        'mozMediaStreamTrack',
+        'mozRTCPeerConnection',
+        'mozRTCSessionDescription',
+        'webkitMediaStreamTrack',
+        'webkitRTCPeerConnection',
+        'webkitRTCSessionDescription',
+    ];
+
+    webrtcKeys.forEach(key => {
+        if (window[key]) {
+            Object.defineProperty(window, key, {
+                value: undefined,
+                writable: false,
+                configurable: false
+            });
+        }
+    });
+
+    // Remove mediaDevices
+    const mediaKeys = ['mediaDevices', 'getUserMedia', 'mozGetUserMedia', 'webkitGetUserMedia'];
+    mediaKeys.forEach(key => {
+        Object.defineProperty(navigator, key, {
+            value: undefined,
+            writable: false,
+            configurable: false
+        });
+    });
+})();
+"""
+
+# WebRTC fake IP mode (alternative to blocking)
+WEBRTC_FAKE_PATCH = """
+((publicIP, localIP) => {
+    if (!window.RTCPeerConnection) return;
+
+    const OriginalRTCPeerConnection = window.RTCPeerConnection;
+
+    window.RTCPeerConnection = function(...args) {
+        const pc = new OriginalRTCPeerConnection(...args);
+        const originalSetLocalDescription = pc.setLocalDescription.bind(pc);
+
+        pc.setLocalDescription = function(desc) {
+            if (desc && desc.sdp) {
+                // Replace real IPs with fake ones
+                desc.sdp = desc.sdp.replace(/([0-9]{1,3}(\\.[0-9]{1,3}){3})/g, publicIP);
+            }
+            return originalSetLocalDescription(desc);
+        };
+
+        return pc;
+    };
+
+    window.RTCPeerConnection.prototype = OriginalRTCPeerConnection.prototype;
+})({public_ip}, {local_ip});
+"""
+
+# WebGPU fingerprint noise (from my-fingerprint)
+WEBGPU_NOISE_PATCH = """
+((seed) => {
+    const seededRandom = (offset) => {
+        const s = Math.sin(seed + (offset * 7)) * 10000;
+        return s - Math.floor(s);
+    };
+
+    const makeNoise = (raw, offset) => {
+        const rn = seededRandom(offset) * 64;
+        return raw ? raw - Math.floor(rn) : raw;
+    };
+
+    // GPUAdapter limits
+    if (window.GPUAdapter && GPUAdapter.prototype) {
+        const originalLimitsGetter = Object.getOwnPropertyDescriptor(GPUAdapter.prototype, 'limits');
+        if (originalLimitsGetter && originalLimitsGetter.get) {
+            const origGet = originalLimitsGetter.get;
+            Object.defineProperty(GPUAdapter.prototype, 'limits', {
+                get: function() {
+                    const limits = origGet.call(this);
+                    return new Proxy(limits, {
+                        get(target, prop) {
+                            const value = target[prop];
+                            if (prop === 'maxBufferSize') return makeNoise(value, 0);
+                            if (prop === 'maxStorageBufferBindingSize') return makeNoise(value, 1);
+                            return typeof value === 'function' ? value.bind(target) : value;
+                        }
+                    });
+                },
+                configurable: true
+            });
+        }
+    }
+
+    // GPUDevice limits
+    if (window.GPUDevice && GPUDevice.prototype) {
+        const originalLimitsGetter = Object.getOwnPropertyDescriptor(GPUDevice.prototype, 'limits');
+        if (originalLimitsGetter && originalLimitsGetter.get) {
+            const origGet = originalLimitsGetter.get;
+            Object.defineProperty(GPUDevice.prototype, 'limits', {
+                get: function() {
+                    const limits = origGet.call(this);
+                    return new Proxy(limits, {
+                        get(target, prop) {
+                            const value = target[prop];
+                            if (prop === 'maxBufferSize') return makeNoise(value, 0);
+                            if (prop === 'maxStorageBufferBindingSize') return makeNoise(value, 1);
+                            return typeof value === 'function' ? value.bind(target) : value;
+                        }
+                    });
+                },
+                configurable: true
+            });
+        }
+    }
+
+    // GPUCommandEncoder beginRenderPass
+    if (window.GPUCommandEncoder && GPUCommandEncoder.prototype.beginRenderPass) {
+        const originalBeginRenderPass = GPUCommandEncoder.prototype.beginRenderPass;
+        GPUCommandEncoder.prototype.beginRenderPass = function(desc) {
+            if (desc?.colorAttachments?.[0]?.clearValue) {
+                try {
+                    const cv = desc.colorAttachments[0].clearValue;
+                    let offset = 0;
+                    for (let key in cv) {
+                        const noise = seededRandom(offset++) * 0.01 * 0.001;
+                        cv[key] = Math.abs(cv[key] + cv[key] * noise * -1);
+                    }
+                } catch (e) {}
+            }
+            return originalBeginRenderPass.call(this, desc);
+        };
+    }
+
+    // GPUQueue writeBuffer
+    if (window.GPUQueue && GPUQueue.prototype.writeBuffer) {
+        const originalWriteBuffer = GPUQueue.prototype.writeBuffer;
+        GPUQueue.prototype.writeBuffer = function(buffer, offset, data, ...rest) {
+            if (data instanceof Float32Array) {
+                try {
+                    const count = Math.ceil(data.length * 0.05);
+                    const indices = Array.from({length: data.length}, (_, i) => i)
+                        .sort(() => seededRandom(count) - 0.5)
+                        .slice(0, count);
+
+                    let o = 0;
+                    for (const idx of indices) {
+                        const noise = seededRandom(o++) * 0.0002 - 0.0001;
+                        data[idx] += noise * data[idx];
+                    }
+                } catch (e) {}
+            }
+            return originalWriteBuffer.call(this, buffer, offset, data, ...rest);
+        };
+    }
+})({seed});
+"""
+
+# DomRect fingerprint noise (from my-fingerprint)
+DOMRECT_NOISE_PATCH = """
+((seed) => {
+    const seededRandom = (s) => {
+        const x = Math.sin(s) * 10000;
+        return x - Math.floor(x);
+    };
+
+    const noise = seededRandom(seed) * 1e-6 * 2 - 1e-6;
+
+    // Element.getBoundingClientRect
+    const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function() {
+        const rect = originalGetBoundingClientRect.call(this);
+        if (rect) {
+            if (rect.x !== 0) rect.x += noise;
+            if (rect.width !== 0) rect.width += noise;
+            if (rect.y !== 0) rect.y += noise;
+            if (rect.height !== 0) rect.height += noise;
+        }
+        return rect;
+    };
+
+    // Range.getBoundingClientRect
+    if (window.Range && Range.prototype.getBoundingClientRect) {
+        const originalRangeGetBCR = Range.prototype.getBoundingClientRect;
+        Range.prototype.getBoundingClientRect = function() {
+            const rect = originalRangeGetBCR.call(this);
+            if (rect) {
+                if (rect.x !== 0) rect.x += noise;
+                if (rect.width !== 0) rect.width += noise;
+            }
+            return rect;
+        };
+    }
+
+    // Element.getClientRects
+    const originalGetClientRects = Element.prototype.getClientRects;
+    Element.prototype.getClientRects = function() {
+        const rects = originalGetClientRects.call(this);
+        if (rects) {
+            for (let i = 0; i < rects.length; i++) {
+                const rect = rects[i];
+                if (rect.x !== 0) rect.x += noise;
+                if (rect.width !== 0) rect.width += noise;
+            }
+        }
+        return rects;
+    };
+})({seed});
+"""
+
+# Font fingerprint noise (from my-fingerprint)
+FONT_NOISE_PATCH = """
+((seed) => {
+    const seededRandom = (s, max = 1, min = 0) => {
+        const x = Math.sin(s) * 10000;
+        const r = x - Math.floor(x);
+        return Math.floor(min + r * (max - min));
+    };
+
+    const hashCode = (str) => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return hash;
+    };
+
+    // offsetHeight/offsetWidth noise
+    const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+
+    if (originalOffsetHeight && originalOffsetHeight.get) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+            get: function() {
+                const result = originalOffsetHeight.get.call(this);
+                const mark = (this.style?.fontFamily || 'offsetHeight') + result;
+                const noise = seededRandom(hashCode(mark) + seed, 2, -1);
+                return result + noise;
+            },
+            configurable: true
+        });
+    }
+
+    if (originalOffsetWidth && originalOffsetWidth.get) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
+            get: function() {
+                const result = originalOffsetWidth.get.call(this);
+                const mark = (this.style?.fontFamily || 'offsetWidth') + result;
+                const noise = seededRandom(hashCode(mark) + seed, 2, -1);
+                return result + noise;
+            },
+            configurable: true
+        });
+    }
+
+    // FontFace local() spoofing
+    if (window.FontFace) {
+        const OriginalFontFace = window.FontFace;
+        window.FontFace = function(family, source, descriptors) {
+            if (typeof source === 'string' && source.startsWith('local(')) {
+                const name = source.substring(source.indexOf('(') + 1, source.indexOf(')'));
+                const rand = seededRandom(hashCode(name) + seed, 100, 0) / 100;
+                if (rand < 0.02) {
+                    source = `local("${rand}")`;
+                } else if (rand < 0.04) {
+                    source = 'local("Arial")';
+                }
+            }
+            return new OriginalFontFace(family, source, descriptors);
+        };
+        window.FontFace.prototype = OriginalFontFace.prototype;
+    }
+})({seed});
+"""
+
+# UserAgentData (Client Hints) spoofing (from my-fingerprint)
+USERAGENTDATA_PATCH = """
+((uaData) => {
+    if (!navigator.userAgentData) return;
+
+    const brands = uaData.brands || [];
+    const mobile = uaData.mobile || false;
+    const platform = uaData.platform || 'Linux';
+
+    const mockUserAgentData = {
+        brands: brands,
+        mobile: mobile,
+        platform: platform,
+        getHighEntropyValues: async function(hints) {
+            const result = {
+                brands: brands,
+                mobile: mobile,
+                platform: platform
+            };
+
+            if (hints.includes('architecture')) result.architecture = uaData.architecture || 'x86';
+            if (hints.includes('bitness')) result.bitness = uaData.bitness || '64';
+            if (hints.includes('model')) result.model = uaData.model || '';
+            if (hints.includes('platformVersion')) result.platformVersion = uaData.platformVersion || '6.5.0';
+            if (hints.includes('uaFullVersion')) result.uaFullVersion = uaData.uaFullVersion || '120.0.0.0';
+            if (hints.includes('fullVersionList')) result.fullVersionList = uaData.fullVersionList || brands;
+            if (hints.includes('wow64')) result.wow64 = uaData.wow64 || false;
+
+            return result;
+        },
+        toJSON: function() {
+            return {
+                brands: brands,
+                mobile: mobile,
+                platform: platform
+            };
+        }
+    };
+
+    Object.defineProperty(navigator, 'userAgentData', {
+        get: () => mockUserAgentData,
+        configurable: true
+    });
+})({ua_data});
+"""
+
+# Battery API spoofing (from browserforge)
+BATTERY_PATCH = """
+((batteryData) => {
+    if (!navigator.getBattery) return;
+
+    const mockBattery = {
+        charging: batteryData.charging,
+        chargingTime: batteryData.chargingTime,
+        dischargingTime: batteryData.dischargingTime,
+        level: batteryData.level,
+        addEventListener: function() {},
+        removeEventListener: function() {},
+        dispatchEvent: function() { return true; },
+        onchargingchange: null,
+        onchargingtimechange: null,
+        ondischargingtimechange: null,
+        onlevelchange: null
+    };
+
+    navigator.getBattery = function() {
+        return Promise.resolve(mockBattery);
+    };
+})({battery_data});
+"""
+
+# Multimedia devices spoofing (from browserforge)
+MULTIMEDIA_DEVICES_PATCH = """
+((devices) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+
+    const mockDevices = [];
+
+    for (let i = 0; i < devices.webcams; i++) {
+        mockDevices.push({
+            deviceId: 'webcam_' + i,
+            kind: 'videoinput',
+            label: '',
+            groupId: 'group_video_' + i,
+            toJSON: function() { return this; }
+        });
+    }
+
+    for (let i = 0; i < devices.microphones; i++) {
+        mockDevices.push({
+            deviceId: 'mic_' + i,
+            kind: 'audioinput',
+            label: '',
+            groupId: 'group_audio_' + i,
+            toJSON: function() { return this; }
+        });
+    }
+
+    for (let i = 0; i < devices.speakers; i++) {
+        mockDevices.push({
+            deviceId: 'speaker_' + i,
+            kind: 'audiooutput',
+            label: '',
+            groupId: 'group_output_' + i,
+            toJSON: function() { return this; }
+        });
+    }
+
+    navigator.mediaDevices.enumerateDevices = function() {
+        return Promise.resolve(mockDevices);
+    };
+})({devices});
+"""
+
+# Video/Audio codec support spoofing (from browserforge)
+CODECS_PATCH = """
+((videoCodecs, audioCodecs) => {
+    // Video codec support
+    const originalCanPlayType = HTMLVideoElement.prototype.canPlayType;
+    HTMLVideoElement.prototype.canPlayType = function(type) {
+        if (type.includes('video/mp4') || type.includes('avc1')) {
+            return videoCodecs.h264 || '';
+        }
+        if (type.includes('video/ogg') || type.includes('theora')) {
+            return videoCodecs.ogg || '';
+        }
+        if (type.includes('video/webm') || type.includes('vp8') || type.includes('vp9')) {
+            return videoCodecs.webm || '';
+        }
+        return originalCanPlayType.call(this, type);
+    };
+
+    // Audio codec support
+    const originalAudioCanPlayType = HTMLAudioElement.prototype.canPlayType;
+    HTMLAudioElement.prototype.canPlayType = function(type) {
+        if (type.includes('audio/aac') || type.includes('mp4a')) {
+            return audioCodecs.aac || '';
+        }
+        if (type.includes('audio/mpeg') || type.includes('mp3')) {
+            return audioCodecs.mp3 || '';
+        }
+        if (type.includes('audio/ogg') || type.includes('vorbis')) {
+            return audioCodecs.ogg || '';
+        }
+        if (type.includes('audio/wav')) {
+            return audioCodecs.wav || '';
+        }
+        return originalAudioCanPlayType.call(this, type);
+    };
+})({video_codecs}, {audio_codecs});
+"""
+
+# Advanced Audio fingerprint noise with DynamicsCompressor (from my-fingerprint)
+AUDIO_ADVANCED_PATCH = """
+((seed) => {
+    const seededRandom = (s, max = 1, min = 0) => {
+        const x = Math.sin(s) * 10000;
+        const r = x - Math.floor(x);
+        return min + r * (max - min);
+    };
+
+    const dcNoise = seededRandom(seed) * 1e-7;
+    const processedBuffers = new WeakSet();
+
+    // AudioBuffer.getChannelData with step-based noise
+    const originalGetChannelData = AudioBuffer.prototype.getChannelData;
+    AudioBuffer.prototype.getChannelData = function(channel) {
+        const data = originalGetChannelData.call(this, channel);
+        if (processedBuffers.has(data)) return data;
+
+        const step = data.length > 2000 ? 100 : 20;
+        for (let i = 0; i < data.length; i += step) {
+            const v = data[i];
+            if (v !== 0 && Math.abs(v) > 1e-7) {
+                data[i] += seededRandom(seed + i) * 1e-7;
+            }
+        }
+
+        processedBuffers.add(data);
+        return data;
+    };
+
+    // DynamicsCompressorNode.reduction noise
+    if (window.DynamicsCompressorNode) {
+        const originalReductionGetter = Object.getOwnPropertyDescriptor(
+            DynamicsCompressorNode.prototype, 'reduction'
+        );
+        if (originalReductionGetter && originalReductionGetter.get) {
+            Object.defineProperty(DynamicsCompressorNode.prototype, 'reduction', {
+                get: function() {
+                    const res = originalReductionGetter.get.call(this);
+                    return (typeof res === 'number' && res !== 0) ? res + dcNoise : res;
+                },
+                configurable: true
+            });
+        }
+    }
+})({seed});
+"""
+
+# Function.prototype.toString protection (from my-fingerprint)
+# Makes proxied functions appear native
+TOSTRING_PROTECTION_PATCH = """
+(() => {
+    const proxiedFunctions = new WeakSet();
+    const originalToString = Function.prototype.toString;
+
+    window.__fp_markAsProxied = function(fn, original) {
+        proxiedFunctions.add(fn);
+        fn.__fp_original = original;
+    };
+
+    Function.prototype.toString = function() {
+        if (proxiedFunctions.has(this) && this.__fp_original) {
+            return originalToString.call(this.__fp_original);
+        }
+        return originalToString.call(this);
+    };
+})();
+"""
+
 
 class CDPPatches:
-    """CDP patches for hiding browser automation indicators."""
+    """CDP patches for hiding browser automation indicators.
+
+    Enhanced with techniques from my-fingerprint, browserforge, and camoufox.
+    Supports: WebRTC, WebGPU, DomRect, Font, UserAgentData, Battery, Codecs.
+    """
 
     def __init__(self, fingerprint: Optional[Fingerprint] = None) -> None:
         """Initialize CDP patches with optional fingerprint."""
@@ -505,6 +1031,7 @@ class CDPPatches:
     def get_base_patches() -> list[str]:
         """Get all basic stealth patches that don't require customization."""
         return [
+            TOSTRING_PROTECTION_PATCH,  # Must be first to protect other patches
             WEBDRIVER_PATCH,
             CHROME_PATCHES,
             PERMISSIONS_PATCH,
@@ -519,6 +1046,12 @@ class CDPPatches:
 
         if self._fingerprint:
             fp = self._fingerprint
+
+            # Global seed for consistent noise
+            global_seed = fp.global_seed or fp.canvas.noise_seed or "Date.now()"
+            patches.append(
+                SEEDED_RANDOM_PATCH.replace("{global_seed}", str(global_seed))
+            )
 
             # Languages
             langs_js = str(fp.navigator.languages).replace("'", '"')
@@ -558,10 +1091,15 @@ class CDPPatches:
                     CANVAS_NOISE_PATCH.replace("{seed}", str(seed))
                 )
 
-            # Audio noise
+            # Audio noise (basic and advanced)
+            audio_seed = fp.audio.noise_seed or fp.canvas.noise_seed or "Date.now()"
             patches.append(
-                AUDIO_NOISE_PATCH.replace("{seed}", str(fp.canvas.noise_seed or "Date.now()"))
+                AUDIO_NOISE_PATCH.replace("{seed}", str(audio_seed))
             )
+            if fp.audio.noise_enabled:
+                patches.append(
+                    AUDIO_ADVANCED_PATCH.replace("{seed}", str(audio_seed))
+                )
 
             # Screen
             patches.append(
@@ -580,11 +1118,92 @@ class CDPPatches:
                 .replace("{timezone}", f"'{fp.timezone}'")
                 .replace("{offset}", str(fp.timezone_offset))
             )
+
+            # ========== NEW PATCHES FROM MY-FINGERPRINT ==========
+
+            # WebRTC protection
+            if not fp.webrtc.enabled or fp.webrtc.mode == "disable":
+                patches.append(WEBRTC_DISABLE_PATCH)
+            elif fp.webrtc.mode == "fake" and fp.webrtc.public_ip:
+                patches.append(
+                    WEBRTC_FAKE_PATCH
+                    .replace("{public_ip}", f"'{fp.webrtc.public_ip}'")
+                    .replace("{local_ip}", f"'{fp.webrtc.local_ip or fp.webrtc.public_ip}'")
+                )
+
+            # WebGPU noise
+            if fp.webgpu.noise_enabled:
+                webgpu_seed = fp.webgpu.noise_seed or fp.canvas.noise_seed or "Date.now()"
+                patches.append(
+                    WEBGPU_NOISE_PATCH.replace("{seed}", str(webgpu_seed))
+                )
+
+            # DomRect noise
+            if fp.dom_rect.noise_enabled:
+                domrect_seed = fp.dom_rect.noise_seed or fp.canvas.noise_seed or "Date.now()"
+                patches.append(
+                    DOMRECT_NOISE_PATCH.replace("{seed}", str(domrect_seed))
+                )
+
+            # Font noise
+            if fp.font_fp.noise_enabled:
+                font_seed = fp.font_fp.noise_seed or fp.canvas.noise_seed or "Date.now()"
+                patches.append(
+                    FONT_NOISE_PATCH.replace("{seed}", str(font_seed))
+                )
+
+            # UserAgentData (Client Hints)
+            ua_data = {
+                "brands": fp.user_agent_data.brands,
+                "mobile": fp.user_agent_data.mobile,
+                "platform": fp.user_agent_data.platform,
+                "platformVersion": fp.user_agent_data.platform_version,
+                "architecture": fp.user_agent_data.architecture,
+                "bitness": fp.user_agent_data.bitness,
+                "model": fp.user_agent_data.model,
+                "uaFullVersion": fp.user_agent_data.ua_full_version,
+                "fullVersionList": fp.user_agent_data.full_version_list,
+                "wow64": fp.user_agent_data.wow64,
+            }
+            import json
+            patches.append(
+                USERAGENTDATA_PATCH.replace("{ua_data}", json.dumps(ua_data))
+            )
+
+            # Battery API
+            battery_data = {
+                "charging": fp.battery.charging,
+                "chargingTime": fp.battery.charging_time,
+                "dischargingTime": fp.battery.discharging_time,
+                "level": fp.battery.level,
+            }
+            patches.append(
+                BATTERY_PATCH.replace("{battery_data}", json.dumps(battery_data))
+            )
+
+            # Multimedia devices
+            devices = {
+                "webcams": fp.multimedia_devices.webcams,
+                "microphones": fp.multimedia_devices.microphones,
+                "speakers": fp.multimedia_devices.speakers,
+            }
+            patches.append(
+                MULTIMEDIA_DEVICES_PATCH.replace("{devices}", json.dumps(devices))
+            )
+
+            # Video/Audio codecs
+            patches.append(
+                CODECS_PATCH
+                .replace("{video_codecs}", json.dumps(fp.video_codecs))
+                .replace("{audio_codecs}", json.dumps(fp.audio_codecs))
+            )
+
         else:
             # Default patches without fingerprint
             patches.append(LANGUAGES_PATCH)
             patches.append(HARDWARE_CONCURRENCY_PATCH.replace("{concurrency}", "8"))
             patches.append(DEVICE_MEMORY_PATCH.replace("{memory}", "8"))
+            patches.append(WEBRTC_DISABLE_PATCH)  # Block WebRTC by default
 
         return patches
 
