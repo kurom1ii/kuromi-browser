@@ -2,14 +2,28 @@
 Stealth module for kuromi-browser.
 
 This module provides anti-detection and fingerprint spoofing capabilities:
-- StealthConfig: Configuration for stealth features
-- StealthPatches: JavaScript patches for browser API spoofing
+- CDPPatches: CDP-level JavaScript patches for browser API spoofing
 - FingerprintGenerator: Generate realistic browser fingerprints
+- HumanMouse: Human-like mouse movement simulation
+- HumanKeyboard: Human-like keyboard input simulation
+- TLSClient: TLS fingerprint impersonation using curl_cffi
 """
 
 from typing import Any, Optional
 
 from kuromi_browser.models import Fingerprint
+
+# Import submodules
+from kuromi_browser.stealth.cdp import CDPPatches
+from kuromi_browser.stealth.fingerprint import (
+    FingerprintGenerator,
+    SCREEN_RESOLUTIONS,
+    USER_AGENTS,
+    WEBGL_RENDERERS,
+    TIMEZONES,
+)
+from kuromi_browser.stealth.behavior import HumanMouse, MousePath, HumanKeyboard
+from kuromi_browser.stealth.tls import TLSClient, TLSConfig
 
 
 class StealthConfig:
@@ -73,6 +87,9 @@ class StealthPatches:
 
     Generates and applies JavaScript code to override browser APIs
     and hide automation indicators.
+
+    This class wraps CDPPatches for backward compatibility.
+    For new code, use CDPPatches directly.
     """
 
     def __init__(
@@ -82,78 +99,62 @@ class StealthPatches:
     ) -> None:
         self._fingerprint = fingerprint
         self._config = config or StealthConfig()
+        self._cdp_patches = CDPPatches(fingerprint)
 
     def generate_patches(self) -> str:
         """Generate all stealth patches as JavaScript code."""
-        raise NotImplementedError
+        return self._cdp_patches.get_combined_patch()
 
     def patch_webdriver(self) -> str:
         """Generate patch to hide webdriver property."""
-        return """
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined,
-            configurable: true
-        });
-        """
+        from kuromi_browser.stealth.cdp.patches import WEBDRIVER_PATCH
+        return WEBDRIVER_PATCH
 
     def patch_chrome_runtime(self) -> str:
         """Generate patch for chrome.runtime."""
-        raise NotImplementedError
+        from kuromi_browser.stealth.cdp.patches import CHROME_PATCHES
+        return CHROME_PATCHES
 
     def patch_navigator_plugins(self) -> str:
         """Generate patch for navigator.plugins."""
-        raise NotImplementedError
+        from kuromi_browser.stealth.cdp.patches import PLUGINS_PATCH
+        return PLUGINS_PATCH
 
     def patch_webgl(self) -> str:
         """Generate patch for WebGL fingerprint."""
-        raise NotImplementedError
+        from kuromi_browser.stealth.cdp.patches import WEBGL_PATCH
+        if self._fingerprint and self._fingerprint.webgl.vendor:
+            return WEBGL_PATCH.replace(
+                "{vendor}", f"'{self._fingerprint.webgl.vendor}'"
+            ).replace(
+                "{renderer}", f"'{self._fingerprint.webgl.renderer}'"
+            )
+        return ""
 
     def patch_canvas(self) -> str:
         """Generate patch to add noise to canvas fingerprint."""
-        raise NotImplementedError
+        from kuromi_browser.stealth.cdp.patches import CANVAS_NOISE_PATCH
+        seed = "Date.now()"
+        if self._fingerprint and self._fingerprint.canvas.noise_seed:
+            seed = str(self._fingerprint.canvas.noise_seed)
+        return CANVAS_NOISE_PATCH.replace("{seed}", seed)
 
     def patch_audio(self) -> str:
         """Generate patch to add noise to audio fingerprint."""
-        raise NotImplementedError
+        from kuromi_browser.stealth.cdp.patches import AUDIO_NOISE_PATCH
+        seed = "Date.now()"
+        if self._fingerprint and self._fingerprint.canvas.noise_seed:
+            seed = str(self._fingerprint.canvas.noise_seed)
+        return AUDIO_NOISE_PATCH.replace("{seed}", seed)
 
     def patch_fonts(self) -> str:
         """Generate patch for font detection."""
-        raise NotImplementedError
+        # Font detection is handled by providing consistent font list
+        return ""
 
     def get_init_script(self) -> str:
         """Get the full initialization script to inject."""
-        raise NotImplementedError
-
-
-class FingerprintGenerator:
-    """Generate realistic browser fingerprints.
-
-    Creates consistent and believable fingerprint profiles that
-    pass common detection tests.
-    """
-
-    @staticmethod
-    def generate(
-        *,
-        browser: str = "chrome",
-        os: str = "linux",
-        device: str = "desktop",
-        locale: str = "en-US",
-        screen_width: Optional[int] = None,
-        screen_height: Optional[int] = None,
-    ) -> Fingerprint:
-        """Generate a random fingerprint matching the specified profile."""
-        raise NotImplementedError
-
-    @staticmethod
-    def from_browserforge() -> Fingerprint:
-        """Generate fingerprint using browserforge library."""
-        raise NotImplementedError
-
-    @staticmethod
-    def validate(fingerprint: Fingerprint) -> list[str]:
-        """Validate fingerprint consistency, return list of issues."""
-        raise NotImplementedError
+        return self.generate_patches()
 
 
 async def apply_stealth(
@@ -164,13 +165,78 @@ async def apply_stealth(
     """Apply stealth patches to a CDP session.
 
     This is the main entry point for enabling stealth mode on a page.
+    Should be called after creating a new page/context but before navigation.
+
+    Args:
+        cdp_session: CDP session object with a send() method
+        fingerprint: Optional fingerprint to use for customizing patches
+        config: Optional stealth configuration (currently unused, reserved for future)
+
+    Example:
+        async with browser.new_page() as page:
+            await apply_stealth(page.cdp_session, fingerprint)
+            await page.goto("https://example.com")
     """
-    raise NotImplementedError
+    patches = CDPPatches(fingerprint)
+    await patches.apply_to_page(cdp_session)
+
+    # Set user agent if fingerprint provided
+    if fingerprint:
+        await cdp_session.send(
+            "Emulation.setUserAgentOverride",
+            {
+                "userAgent": fingerprint.user_agent,
+                "platform": fingerprint.navigator.platform,
+                "acceptLanguage": ",".join(fingerprint.navigator.languages),
+            },
+        )
+
+        # Set timezone if configured
+        if config is None or config.timezone:
+            await cdp_session.send(
+                "Emulation.setTimezoneOverride",
+                {"timezoneId": fingerprint.timezone},
+            )
+
+        # Set locale
+        await cdp_session.send(
+            "Emulation.setLocaleOverride",
+            {"locale": fingerprint.locale},
+        )
+
+
+async def apply_stealth_basic(cdp_session: Any) -> None:
+    """Apply basic stealth patches without fingerprint customization.
+
+    This is a lightweight version that only applies essential patches
+    to hide automation indicators.
+
+    Args:
+        cdp_session: CDP session object with a send() method
+    """
+    await CDPPatches.apply_basic_patches(cdp_session)
 
 
 __all__ = [
+    # Main classes
     "StealthConfig",
     "StealthPatches",
     "FingerprintGenerator",
+    # CDP Patches
+    "CDPPatches",
+    # Behavior simulation
+    "HumanMouse",
+    "MousePath",
+    "HumanKeyboard",
+    # TLS impersonation
+    "TLSClient",
+    "TLSConfig",
+    # Data constants
+    "SCREEN_RESOLUTIONS",
+    "USER_AGENTS",
+    "WEBGL_RENDERERS",
+    "TIMEZONES",
+    # Functions
     "apply_stealth",
+    "apply_stealth_basic",
 ]
