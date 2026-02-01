@@ -1,5 +1,13 @@
 """
 AI Agent for browser automation in kuromi-browser.
+
+This module provides the core Agent class that uses LLMs to understand
+and execute browser automation tasks. It integrates with the AI module
+for enhanced capabilities including:
+
+- DOM serialization for better element understanding
+- Vision analysis for visual feedback
+- Task parsing for natural language input
 """
 
 import re
@@ -39,6 +47,8 @@ except ImportError:
 
 if TYPE_CHECKING:
     from kuromi_browser.page import Page
+    from kuromi_browser.ai.dom_serializer import DOMSerializer
+    from kuromi_browser.ai.vision import VisionAnalyzer
 
 
 @dataclass
@@ -68,7 +78,28 @@ class Agent(BaseAgent):
     """AI-powered browser automation agent.
 
     Uses LLMs to understand tasks, plan actions, and execute them
-    on web pages automatically.
+    on web pages automatically. Supports both vision-based and
+    DOM-based observation modes.
+
+    Features:
+    - Vision mode: Uses screenshots for visual understanding
+    - DOM mode: Uses serialized DOM for structured element info
+    - Hybrid mode: Combines both for best results
+    - Memory: Tracks action history for context
+
+    Example:
+        from kuromi_browser.agent import Agent
+        from kuromi_browser.llm import OpenAIProvider
+
+        llm = OpenAIProvider()
+        agent = Agent(llm, page)
+
+        # Run a task
+        result = await agent.run("Click the login button")
+
+        # Or step-by-step
+        action = await agent.step("Find the search box")
+        await agent.act("fill", selector="#search", value="query")
     """
 
     SYSTEM_PROMPT = """You are a browser automation agent. Your goal is to complete tasks on web pages.
@@ -87,6 +118,12 @@ You can perform the following actions:
 - done: {"result": ...} - Task completed successfully
 - fail: {"reason": "..."} - Task failed
 
+For selectors, you can use:
+- CSS selectors: "#id", ".class", "tag"
+- Text selectors: "text:Button Text"
+- Attribute selectors: "[name='field']", "[placeholder='...']"
+- Index-based: Use [index] from the element list
+
 Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "..."}
 """
 
@@ -94,17 +131,31 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
         self,
         llm: LLMProvider,
         page: Optional["Page"] = None,
+        *,
+        use_vision: bool = True,
+        use_dom: bool = True,
+        max_history: int = 10,
     ) -> None:
         """Initialize the agent.
 
         Args:
             llm: LLM provider for decision making.
             page: Browser page to control (optional, can be set later).
+            use_vision: Whether to use screenshot analysis.
+            use_dom: Whether to use DOM serialization.
+            max_history: Maximum history entries to keep for context.
         """
         self._llm = llm
         self._page = page
+        self._use_vision = use_vision
+        self._use_dom = use_dom
+        self._max_history = max_history
         self._history: list[dict[str, Any]] = []
         self._current_step = 0
+
+        # AI components (lazy initialized)
+        self._dom_serializer: Optional["DOMSerializer"] = None
+        self._vision_analyzer: Optional["VisionAnalyzer"] = None
 
     @property
     def page(self) -> Optional["Page"]:
@@ -115,11 +166,27 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
     def page(self, value: "Page") -> None:
         """Set the page to control."""
         self._page = value
+        # Reset serializer when page changes
+        self._dom_serializer = None
 
     @property
     def history(self) -> list[dict[str, Any]]:
         """Get the action history."""
         return self._history.copy()
+
+    def _get_dom_serializer(self) -> "DOMSerializer":
+        """Get or create DOM serializer."""
+        if self._dom_serializer is None and self._page is not None:
+            from kuromi_browser.ai.dom_serializer import DOMSerializer
+            self._dom_serializer = DOMSerializer(self._page, max_elements=50)
+        return self._dom_serializer  # type: ignore
+
+    def _get_vision_analyzer(self) -> "VisionAnalyzer":
+        """Get or create vision analyzer."""
+        if self._vision_analyzer is None:
+            from kuromi_browser.ai.vision import VisionAnalyzer
+            self._vision_analyzer = VisionAnalyzer(self._llm)
+        return self._vision_analyzer
 
     async def run(
         self,
@@ -127,6 +194,7 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
         *,
         max_steps: int = 10,
         timeout: Optional[float] = None,
+        on_step: Optional[callable] = None,
     ) -> AgentResult:
         """Run the agent to complete a task.
 
@@ -134,6 +202,7 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
             task: Description of the task to complete.
             max_steps: Maximum number of steps to take.
             timeout: Timeout in seconds (not yet implemented).
+            on_step: Optional callback after each step (step_num, action, result).
 
         Returns:
             AgentResult with success status and any extracted data.
@@ -152,17 +221,28 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
             for step in range(max_steps):
                 self._current_step = step + 1
 
-                # Take screenshot for vision
-                screenshot = await self._page.screenshot()
+                # Get observation (screenshot and/or DOM)
+                screenshot = None
+                dom_info = None
+
+                if self._use_vision:
+                    screenshot = await self._page.screenshot()
+
+                if self._use_dom:
+                    dom_info = await self._get_dom_context()
 
                 # Think about what to do next
-                action = await self._think(task, screenshot)
+                action = await self._think(task, screenshot, dom_info)
 
                 # Record the action
                 self._history.append({
                     "step": self._current_step,
                     "action": action.to_dict(),
                 })
+
+                # Trim history if needed
+                if len(self._history) > self._max_history:
+                    self._history = self._history[-self._max_history:]
 
                 # Check if we're done
                 if action.type == ActionType.DONE:
@@ -189,6 +269,10 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
                 # Record the result
                 self._history[-1]["result"] = result.to_dict()
 
+                # Call step callback
+                if on_step:
+                    on_step(self._current_step, action, result)
+
                 if not result.success:
                     # Continue even on failure, let the agent decide what to do
                     pass
@@ -211,12 +295,29 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
                 history=self._history,
             )
 
-    async def _think(self, task: str, screenshot: Optional[bytes] = None) -> Action:
+    async def _get_dom_context(self) -> str:
+        """Get DOM context for LLM."""
+        try:
+            serializer = self._get_dom_serializer()
+            if serializer:
+                snapshot = await serializer.serialize()
+                return snapshot.to_text()
+        except Exception:
+            pass
+        return ""
+
+    async def _think(
+        self,
+        task: str,
+        screenshot: Optional[bytes] = None,
+        dom_info: Optional[str] = None,
+    ) -> Action:
         """Use LLM to decide the next action.
 
         Args:
             task: The task to complete.
             screenshot: Current page screenshot.
+            dom_info: Serialized DOM information.
 
         Returns:
             The action to perform.
@@ -230,13 +331,22 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
                 result = entry.get("result", {})
                 history_context += f"- {action['type']}: {action.get('args', {})} -> {'success' if result.get('success') else 'failed'}\n"
 
+        # Build page context
+        page_context = ""
+        if dom_info:
+            page_context = f"\n\nPage elements:\n{dom_info}"
+
         # Build the prompt
+        prompt_content = f"Task: {task}\n\nStep: {self._current_step}{history_context}{page_context}"
+
+        if screenshot:
+            prompt_content += "\n\nAnalyze the screenshot and the element list above to decide the next action."
+        else:
+            prompt_content += "\n\nBased on the page elements, what action should we take next?"
+
         messages = [
             {"role": "system", "content": self.SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Task: {task}\n\nStep: {self._current_step}{history_context}\n\nBased on the current screenshot, what action should we take next?",
-            },
+            {"role": "user", "content": prompt_content},
         ]
 
         # Get LLM response
@@ -411,14 +521,30 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
         return result.to_dict()
 
     async def observe(self) -> dict[str, Any]:
-        """Observe the current state of the page."""
+        """Observe the current state of the page.
+
+        Returns:
+            Dictionary with page state including URL, title, and optionally
+            DOM elements and visual analysis.
+        """
         if self._page is None:
             return {"error": "No page set"}
 
-        return {
+        result: dict[str, Any] = {
             "url": self._page.url,
             "title": self._page.title,
         }
+
+        # Add DOM info if enabled
+        if self._use_dom:
+            try:
+                dom_context = await self._get_dom_context()
+                if dom_context:
+                    result["elements"] = dom_context
+            except Exception:
+                pass
+
+        return result
 
     async def act(self, action: str, *args: Any, **kwargs: Any) -> Any:
         """Perform an action on the page."""

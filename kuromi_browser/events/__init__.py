@@ -6,17 +6,54 @@ This module provides event handling and pub/sub capabilities:
 - EventBus: Global event bus for cross-component communication
 - AsyncEventEmitter: Async-compatible event emitter
 - Typed events for different operations
+- Middleware and filtering support
+
+Example:
+    ```python
+    from kuromi_browser.events import EventBus, EventType, on_event
+
+    bus = EventBus.get_instance()
+
+    # Register handler
+    @on_event(EventType.PAGE_LOADED)
+    async def on_page_loaded(event):
+        print(f"Page loaded: {event.data}")
+
+    # Or manually
+    bus.on(EventType.NAVIGATE, lambda e: print(f"Navigating to {e.data}"))
+
+    # With priority and filter
+    bus.on(
+        EventType.REQUEST,
+        handle_api_request,
+        priority=EventPriority.HIGH,
+        filter=lambda e: "/api/" in e.data.get("url", ""),
+    )
+    ```
 """
 
 from typing import Any, Callable, Optional
 
 # Import from bus module
 from .bus import (
+    # Types and enums
     EventType,
+    EventPriority,
     Event,
+    HandlerEntry,
+    # Type aliases
+    EventHandler,
+    AsyncEventHandler,
+    EventMiddleware,
+    EventFilter,
+    # Classes
     AsyncEventEmitter,
     EventBus,
+    # Functions
     get_event_bus,
+    # Decorators
+    on_event,
+    emit_event,
 )
 
 # Import typed events
@@ -119,13 +156,25 @@ class EventEmitter:
 
 
 __all__ = [
-    # Core
+    # Core types
     "EventType",
+    "EventPriority",
     "Event",
+    "HandlerEntry",
+    # Type aliases
+    "EventHandler",
+    "AsyncEventHandler",
+    "EventMiddleware",
+    "EventFilter",
+    # Emitters
     "EventEmitter",
     "AsyncEventEmitter",
     "EventBus",
+    # Functions
     "get_event_bus",
+    # Decorators
+    "on_event",
+    "emit_event",
     # Navigation events
     "NavigateEvent",
     "PageLoadedEvent",

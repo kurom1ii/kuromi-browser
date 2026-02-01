@@ -23,11 +23,20 @@ With stealth mode:
 
 AI Agent usage:
     from kuromi_browser import Browser, Agent
+    from kuromi_browser.llm import OpenAIProvider
+    from kuromi_browser.ai import AIAgent, DOMSerializer, VisionAnalyzer
 
     async with Browser() as browser:
         page = await browser.new_page()
-        agent = Agent(page)
+
+        # Simple agent
+        llm = OpenAIProvider()
+        agent = Agent(llm, page)
         result = await agent.run("Find the contact form and fill it out")
+
+        # Or use high-level AIAgent
+        ai = AIAgent(page, llm)
+        result = await ai.run("Search for Python tutorials")
 """
 
 __version__ = "0.1.0"
@@ -99,6 +108,21 @@ from kuromi_browser.agent import (
     Agent,
     AgentActions,
     AgentConfig,
+    create_agent,
+)
+
+from kuromi_browser.ai import (
+    AIAgent,
+    DOMSerializer,
+    DOMSnapshot,
+    SerializationFormat,
+    VisionAnalyzer,
+    ScreenshotAnalysis,
+    AnalysisType,
+    TaskParser,
+    ParsedTask,
+    TaskType,
+    create_ai_agent,
 )
 
 from kuromi_browser.browser import (
@@ -113,6 +137,31 @@ from kuromi_browser.browser import (
     Tab,
     TabManager,
     TabState,
+)
+
+from kuromi_browser.media import (
+    ComparisonMethod,
+    ComparisonResult,
+    Download,
+    DownloadManager,
+    DownloadProgress,
+    DownloadState,
+    ImageComparator,
+    ImageFormat,
+    Margin,
+    PageRecorder,
+    PaperFormat,
+    PDFExporter,
+    PDFOptions,
+    Screencast,
+    ScreencastFrame,
+    ScreenshotCapture,
+    ScreenshotOptions,
+    compare_images,
+    download_file,
+    export_to_pdf,
+    record_page,
+    take_screenshot,
 )
 
 __all__ = [
@@ -159,6 +208,19 @@ __all__ = [
     "Agent",
     "AgentActions",
     "AgentConfig",
+    "create_agent",
+    # AI integration
+    "AIAgent",
+    "DOMSerializer",
+    "DOMSnapshot",
+    "SerializationFormat",
+    "VisionAnalyzer",
+    "ScreenshotAnalysis",
+    "AnalysisType",
+    "TaskParser",
+    "ParsedTask",
+    "TaskType",
+    "create_ai_agent",
     # Browser management
     "Browser",
     "BrowserContext",
@@ -171,4 +233,27 @@ __all__ = [
     "Tab",
     "TabManager",
     "TabState",
+    # Media handling
+    "ComparisonMethod",
+    "ComparisonResult",
+    "Download",
+    "DownloadManager",
+    "DownloadProgress",
+    "DownloadState",
+    "ImageComparator",
+    "ImageFormat",
+    "Margin",
+    "PageRecorder",
+    "PaperFormat",
+    "PDFExporter",
+    "PDFOptions",
+    "Screencast",
+    "ScreencastFrame",
+    "ScreenshotCapture",
+    "ScreenshotOptions",
+    "compare_images",
+    "download_file",
+    "export_to_pdf",
+    "record_page",
+    "take_screenshot",
 ]
