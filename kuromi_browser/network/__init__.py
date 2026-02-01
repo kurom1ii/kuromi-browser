@@ -1,26 +1,118 @@
 """
 Network module for kuromi-browser.
 
-This module provides network interception, monitoring, and manipulation:
-- NetworkMonitor: Monitor and capture network traffic
+This module provides comprehensive network interception, monitoring, and manipulation:
+
+Core Components:
+- NetworkListener: Enhanced network traffic listener with CDP Network domain
+- NetworkMonitor: Legacy network monitor for basic capture
 - RequestInterceptor: Intercept, block, modify, and mock requests
-- HARRecorder: Record network traffic in HAR format
+- HARRecorder: Record and export network traffic in HAR format
 - WebSocketMonitor: Monitor WebSocket connections and messages
-- RequestPattern: Define patterns for request matching
-- ResponseMock: Mock responses for testing
+
+Filtering System:
+- NetworkFilter: Flexible request/response filtering
+- FilterCriteria: Criteria for filtering network traffic
+- ResourceType: Common resource type enum
+- HttpMethod: HTTP method enum
+
+Convenience Filters:
+- url_filter: Filter by URL pattern
+- method_filter: Filter by HTTP method
+- resource_type_filter: Filter by resource type
+- api_filter: Filter API requests (XHR/Fetch)
+- document_filter: Filter document requests
+- media_filter: Filter media requests
+- script_filter: Filter script requests
+- status_filter: Filter by response status
+- error_filter: Filter error responses (4xx/5xx)
+- success_filter: Filter successful responses (2xx)
+
+Example:
+    from kuromi_browser.network import (
+        NetworkListener,
+        NetworkFilter,
+        FilterCriteria,
+        ResourceType,
+        api_filter,
+        HARRecorder,
+    )
+
+    # Create listener with filter
+    listener = NetworkListener(cdp_session)
+    listener.set_filter(api_filter("*api.example.com*"))
+    await listener.start()
+
+    # Register callbacks
+    listener.on_request(lambda req: print(f"Request: {req.url}"))
+    listener.on_response(lambda res: print(f"Response: {res.status}"))
+
+    # Wait for specific request
+    request = await listener.wait_for_request("*users*")
+
+    # Stream entries
+    async for entry in listener.stream():
+        print(f"Entry: {entry.request.url}")
+
+    # Record to HAR
+    recorder = HARRecorder.from_listener(listener)
+    recorder.start("My Page")
+    # ... navigate ...
+    recorder.save("traffic.har")
 """
 
 from typing import Any, Callable, Optional, Union
 from dataclasses import dataclass
 
 from kuromi_browser.models import NetworkRequest, NetworkResponse
+
+# Core monitoring classes
 from kuromi_browser.network.monitor import NetworkMonitor
-from kuromi_browser.network.interceptor import RequestInterceptor, MockResponse, InterceptRule
-from kuromi_browser.network.har import HARRecorder
+from kuromi_browser.network.listener import (
+    NetworkListener,
+    NetworkEntry,
+    StreamingChunk,
+)
+
+# Interception classes
+from kuromi_browser.network.interceptor import (
+    RequestInterceptor,
+    MockResponse,
+    InterceptRule,
+)
+
+# HAR recording
+from kuromi_browser.network.har import (
+    HARRecorder,
+    HAREntry,
+    HARPage,
+    HARTimings,
+)
+
+# WebSocket monitoring
 from kuromi_browser.network.websocket import (
     WebSocketMonitor,
     WebSocketConnection,
     WebSocketFrame,
+)
+
+# Filtering system
+from kuromi_browser.network.filter import (
+    NetworkFilter,
+    FilterCriteria,
+    ResourceType,
+    HttpMethod,
+    # Factory functions
+    url_filter,
+    method_filter,
+    resource_type_filter,
+    api_filter,
+    document_filter,
+    media_filter,
+    script_filter,
+    status_filter,
+    error_filter,
+    success_filter,
 )
 
 
@@ -87,7 +179,7 @@ class ResponseMock:
 
 
 class NetworkInterceptor:
-    """Intercepts and modifies network requests.
+    """High-level network interceptor wrapper.
 
     Allows inspection, blocking, and modification of network traffic.
     This is a higher-level wrapper around RequestInterceptor.
@@ -130,18 +222,46 @@ class NetworkInterceptor:
 
 
 __all__ = [
-    # Core classes
+    # Core monitoring
     "NetworkMonitor",
+    "NetworkListener",
+    "NetworkEntry",
+    "StreamingChunk",
+
+    # Interception
     "RequestInterceptor",
-    "HARRecorder",
-    "WebSocketMonitor",
-    # Data classes
-    "RequestPattern",
-    "ResponseMock",
     "MockResponse",
     "InterceptRule",
+    "NetworkInterceptor",
+    "RequestPattern",
+    "ResponseMock",
+
+    # HAR recording
+    "HARRecorder",
+    "HAREntry",
+    "HARPage",
+    "HARTimings",
+
+    # WebSocket
+    "WebSocketMonitor",
     "WebSocketConnection",
     "WebSocketFrame",
-    # Legacy class
-    "NetworkInterceptor",
+
+    # Filtering
+    "NetworkFilter",
+    "FilterCriteria",
+    "ResourceType",
+    "HttpMethod",
+
+    # Filter factory functions
+    "url_filter",
+    "method_filter",
+    "resource_type_filter",
+    "api_filter",
+    "document_filter",
+    "media_filter",
+    "script_filter",
+    "status_filter",
+    "error_filter",
+    "success_filter",
 ]

@@ -101,6 +101,20 @@ from kuromi_browser.agent import (
     AgentConfig,
 )
 
+from kuromi_browser.browser import (
+    Browser,
+    BrowserContext,
+    BrowserPool,
+    BrowserProfile,
+    BrowserState,
+    ContextOptions,
+    ProfileConfig,
+    ProfileManager,
+    Tab,
+    TabManager,
+    TabState,
+)
+
 __all__ = [
     "__version__",
     "__author__",
@@ -145,4 +159,16 @@ __all__ = [
     "Agent",
     "AgentActions",
     "AgentConfig",
+    # Browser management
+    "Browser",
+    "BrowserContext",
+    "BrowserPool",
+    "BrowserProfile",
+    "BrowserState",
+    "ContextOptions",
+    "ProfileConfig",
+    "ProfileManager",
+    "Tab",
+    "TabManager",
+    "TabState",
 ]
