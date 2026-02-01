@@ -1,2 +1,28 @@
 **/__pycache__
 *.pyc
+
+# Claude Code memory files
+**/CLAUDE.md
+
+# IDE
+.vscode/
+.idea/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Build
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
