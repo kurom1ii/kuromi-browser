@@ -1,8 +1,11 @@
 """
 Network module for kuromi-browser.
 
-This module provides network interception and manipulation:
-- NetworkInterceptor: Intercept and modify requests/responses
+This module provides network interception, monitoring, and manipulation:
+- NetworkMonitor: Monitor and capture network traffic
+- RequestInterceptor: Intercept, block, modify, and mock requests
+- HARRecorder: Record network traffic in HAR format
+- WebSocketMonitor: Monitor WebSocket connections and messages
 - RequestPattern: Define patterns for request matching
 - ResponseMock: Mock responses for testing
 """
@@ -11,6 +14,14 @@ from typing import Any, Callable, Optional, Union
 from dataclasses import dataclass
 
 from kuromi_browser.models import NetworkRequest, NetworkResponse
+from kuromi_browser.network.monitor import NetworkMonitor
+from kuromi_browser.network.interceptor import RequestInterceptor, MockResponse, InterceptRule
+from kuromi_browser.network.har import HARRecorder
+from kuromi_browser.network.websocket import (
+    WebSocketMonitor,
+    WebSocketConnection,
+    WebSocketFrame,
+)
 
 
 @dataclass
@@ -24,7 +35,17 @@ class RequestPattern:
 
     def matches(self, request: NetworkRequest) -> bool:
         """Check if this pattern matches a request."""
-        raise NotImplementedError
+        import fnmatch
+
+        if self.url and request.url != self.url:
+            return False
+        if self.url_pattern and not fnmatch.fnmatch(request.url, self.url_pattern):
+            return False
+        if self.method and request.method.upper() != self.method.upper():
+            return False
+        if self.resource_type and request.resource_type != self.resource_type:
+            return False
+        return True
 
 
 class ResponseMock:
@@ -47,13 +68,29 @@ class ResponseMock:
 
     def to_response(self, request: NetworkRequest) -> NetworkResponse:
         """Convert to NetworkResponse."""
-        raise NotImplementedError
+        import time
+
+        body_bytes = None
+        if self.body:
+            body_bytes = self.body if isinstance(self.body, bytes) else self.body.encode("utf-8")
+
+        return NetworkResponse(
+            request_id=request.request_id,
+            url=request.url,
+            status=self.status,
+            status_text=self.status_text,
+            headers=self.headers,
+            mime_type=self.content_type,
+            body=body_bytes,
+            timestamp=time.time(),
+        )
 
 
 class NetworkInterceptor:
     """Intercepts and modifies network requests.
 
     Allows inspection, blocking, and modification of network traffic.
+    This is a higher-level wrapper around RequestInterceptor.
     """
 
     def __init__(self) -> None:
@@ -79,61 +116,32 @@ class NetworkInterceptor:
 
     async def handle_request(self, request: NetworkRequest) -> Optional[NetworkResponse]:
         """Process a request through handlers."""
-        raise NotImplementedError
+        for pattern in self._blocked_patterns:
+            if pattern.matches(request):
+                return None
 
+        for pattern, handler in self._handlers:
+            if pattern.matches(request):
+                result = handler(request)
+                if result is not None:
+                    return result
 
-class NetworkMonitor:
-    """Monitors network traffic for analysis.
-
-    Collects and aggregates network request/response data.
-    """
-
-    def __init__(self) -> None:
-        self._requests: list[NetworkRequest] = []
-        self._responses: list[NetworkResponse] = []
-        self._enabled = False
-
-    @property
-    def requests(self) -> list[NetworkRequest]:
-        return self._requests.copy()
-
-    @property
-    def responses(self) -> list[NetworkResponse]:
-        return self._responses.copy()
-
-    def start(self) -> None:
-        """Start monitoring network traffic."""
-        self._enabled = True
-
-    def stop(self) -> None:
-        """Stop monitoring network traffic."""
-        self._enabled = False
-
-    def clear(self) -> None:
-        """Clear collected data."""
-        self._requests.clear()
-        self._responses.clear()
-
-    def wait_for_request(
-        self,
-        pattern: RequestPattern,
-        timeout: float = 30.0,
-    ) -> NetworkRequest:
-        """Wait for a request matching the pattern."""
-        raise NotImplementedError
-
-    def wait_for_response(
-        self,
-        pattern: RequestPattern,
-        timeout: float = 30.0,
-    ) -> NetworkResponse:
-        """Wait for a response matching the pattern."""
-        raise NotImplementedError
+        return None
 
 
 __all__ = [
+    # Core classes
+    "NetworkMonitor",
+    "RequestInterceptor",
+    "HARRecorder",
+    "WebSocketMonitor",
+    # Data classes
     "RequestPattern",
     "ResponseMock",
+    "MockResponse",
+    "InterceptRule",
+    "WebSocketConnection",
+    "WebSocketFrame",
+    # Legacy class
     "NetworkInterceptor",
-    "NetworkMonitor",
 ]

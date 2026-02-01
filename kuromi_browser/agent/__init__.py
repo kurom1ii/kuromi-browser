@@ -3,18 +3,19 @@ AI Agent module for kuromi-browser.
 
 This module provides LLM-powered browser automation:
 - Agent: Main AI agent class
+- AgentResult: Result of running an agent task
 - AgentConfig: Configuration for agent behavior
-- Actions: Available browser actions for the agent
-- Prompts: System prompts and templates
+- Action, ActionType, ActionResult: Action definitions
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
-from kuromi_browser.interfaces import BaseAgent
+from kuromi_browser.agent.actions import Action, ActionResult, ActionType
+from kuromi_browser.agent.agent import Agent, AgentResult
 
 if TYPE_CHECKING:
     from kuromi_browser.page import Page
-    from kuromi_browser.models import Fingerprint
+    from kuromi_browser.llm import LLMProvider
 
 
 class AgentConfig:
@@ -46,96 +47,6 @@ class AgentConfig:
         self.system_prompt = system_prompt
 
 
-class Agent(BaseAgent):
-    """AI-powered browser automation agent.
-
-    Uses LLMs to understand tasks, plan actions, and execute them
-    on web pages automatically.
-    """
-
-    def __init__(
-        self,
-        page: "Page",
-        config: Optional[AgentConfig] = None,
-    ) -> None:
-        self._page = page
-        self._config = config or AgentConfig()
-        self._history: list[dict[str, Any]] = []
-        self._current_step = 0
-
-    @property
-    def page(self) -> "Page":
-        return self._page
-
-    @property
-    def config(self) -> AgentConfig:
-        return self._config
-
-    @property
-    def history(self) -> list[dict[str, Any]]:
-        return self._history.copy()
-
-    async def run(
-        self,
-        task: str,
-        *,
-        max_steps: Optional[int] = None,
-        timeout: Optional[float] = None,
-    ) -> Any:
-        """Run the agent to complete a task."""
-        raise NotImplementedError
-
-    async def step(
-        self,
-        instruction: str,
-    ) -> Any:
-        """Execute a single step based on an instruction."""
-        raise NotImplementedError
-
-    async def observe(self) -> dict[str, Any]:
-        """Observe the current state of the page."""
-        raise NotImplementedError
-
-    async def act(
-        self,
-        action: str,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Perform an action on the page."""
-        raise NotImplementedError
-
-    async def plan(
-        self,
-        goal: str,
-    ) -> list[str]:
-        """Generate a plan to achieve a goal."""
-        raise NotImplementedError
-
-    async def reflect(
-        self,
-        observation: dict[str, Any],
-        action: str,
-        result: Any,
-    ) -> str:
-        """Reflect on an action's result."""
-        raise NotImplementedError
-
-    async def _get_page_state(self) -> dict[str, Any]:
-        """Get current page state for LLM context."""
-        raise NotImplementedError
-
-    async def _parse_action(self, llm_response: str) -> tuple[str, list[Any], dict[str, Any]]:
-        """Parse LLM response into action, args, kwargs."""
-        raise NotImplementedError
-
-    async def _execute_action(
-        self, action: str, args: list[Any], kwargs: dict[str, Any]
-    ) -> Any:
-        """Execute a parsed action on the page."""
-        raise NotImplementedError
-
-
 class AgentActions:
     """Available actions for the AI agent.
 
@@ -143,6 +54,7 @@ class AgentActions:
     with web pages.
     """
 
+    NAVIGATE = "navigate"
     CLICK = "click"
     TYPE = "type"
     FILL = "fill"
@@ -166,6 +78,7 @@ class AgentActions:
     def all(cls) -> list[str]:
         """Get all available actions."""
         return [
+            cls.NAVIGATE,
             cls.CLICK,
             cls.TYPE,
             cls.FILL,
@@ -189,6 +102,10 @@ class AgentActions:
 
 __all__ = [
     "Agent",
+    "AgentResult",
     "AgentConfig",
     "AgentActions",
+    "Action",
+    "ActionType",
+    "ActionResult",
 ]

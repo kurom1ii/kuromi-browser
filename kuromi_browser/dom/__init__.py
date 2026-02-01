@@ -1,11 +1,11 @@
 """
 DOM parsing and manipulation module for kuromi-browser.
 
-This module provides fast DOM parsing using lxml:
-- DOMParser: Parse HTML/XML documents
-- DOMElement: Wrapper for parsed elements
-- Selector: CSS selector engine
-- XPath: XPath query support
+This module provides:
+- DOMParser/DOMElement: Fast HTML/XML parsing using lxml
+- Element: CDP-based live DOM element for browser interaction
+- Locator: DrissionPage-style selector parsing
+- DOMService: High-level DOM service with shadow DOM and iframe support
 """
 
 from typing import Any, Iterator, Optional, Union
@@ -13,12 +13,18 @@ from typing import Any, Iterator, Optional, Union
 from lxml import etree
 from lxml.html import HtmlElement
 
+from kuromi_browser.dom.element import Element
+from kuromi_browser.dom.locator import Locator, SelectorType
+from kuromi_browser.dom.service import DOMService
+
 
 class DOMElement:
     """Wrapper around lxml element for convenient DOM manipulation.
 
     Provides a simple interface for querying and extracting data from
-    parsed HTML documents.
+    parsed HTML documents. This is for offline/static HTML parsing.
+
+    For live browser DOM interaction, use Element class instead.
     """
 
     def __init__(self, element: HtmlElement) -> None:
@@ -130,6 +136,12 @@ class DOMParser:
 
 
 __all__ = [
+    # Static DOM parsing (lxml-based)
     "DOMElement",
     "DOMParser",
+    # Live DOM interaction (CDP-based)
+    "Element",
+    "Locator",
+    "SelectorType",
+    "DOMService",
 ]

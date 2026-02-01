@@ -4,168 +4,34 @@ HTTP session module for kuromi-browser.
 This module provides lightweight HTTP client capabilities using curl_cffi:
 - Session: Async HTTP client with TLS fingerprint spoofing
 - SessionPool: Connection pooling for concurrent requests
-- Request/Response wrappers
+- Response: HTTP response wrapper with HTML parsing
+- SessionElement: DOM-like element wrapper for lxml
+
+Example usage:
+    from kuromi_browser.session import Session
+
+    async with Session(impersonate="chrome120") as session:
+        response = await session.get("https://example.com")
+        print(response.status_code)
+
+        # Parse HTML elements
+        title = response.ele("title")
+        print(title.text)
+
+        # Find multiple elements
+        links = response.eles("a[href]")
+        for link in links:
+            print(link.attr("href"))
 """
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Optional
 
-from kuromi_browser.interfaces import BaseSession
+from kuromi_browser.session.client import Session
+from kuromi_browser.session.element import SessionElement
+from kuromi_browser.session.response import HTTPError, Response
 
 if TYPE_CHECKING:
-    from kuromi_browser.models import Fingerprint, NetworkResponse
-
-
-class Session(BaseSession):
-    """Async HTTP session with TLS fingerprint spoofing.
-
-    Uses curl_cffi to impersonate browser TLS/JA3 fingerprints,
-    making HTTP requests appear to come from real browsers.
-    """
-
-    def __init__(
-        self,
-        fingerprint: Optional["Fingerprint"] = None,
-        proxy: Optional[str] = None,
-        impersonate: str = "chrome120",
-        timeout: float = 30.0,
-    ) -> None:
-        self._fingerprint = fingerprint
-        self._proxy = proxy
-        self._impersonate = impersonate
-        self._timeout = timeout
-        self._cookies: dict[str, str] = {}
-        self._headers: dict[str, str] = {}
-        self._client: Any = None
-
-    @property
-    def cookies(self) -> dict[str, str]:
-        return self._cookies.copy()
-
-    async def _ensure_client(self) -> None:
-        """Initialize the curl_cffi client if needed."""
-        if self._client is None:
-            from curl_cffi.requests import AsyncSession
-
-            self._client = AsyncSession(
-                impersonate=self._impersonate,
-                proxy=self._proxy,
-                timeout=self._timeout,
-            )
-
-    async def get(
-        self,
-        url: str,
-        *,
-        params: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def post(
-        self,
-        url: str,
-        *,
-        data: Optional[Union[dict[str, Any], str, bytes]] = None,
-        json: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def put(
-        self,
-        url: str,
-        *,
-        data: Optional[Union[dict[str, Any], str, bytes]] = None,
-        json: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def patch(
-        self,
-        url: str,
-        *,
-        data: Optional[Union[dict[str, Any], str, bytes]] = None,
-        json: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def delete(
-        self,
-        url: str,
-        *,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def head(
-        self,
-        url: str,
-        *,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def options(
-        self,
-        url: str,
-        *,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def request(
-        self,
-        method: str,
-        url: str,
-        *,
-        params: Optional[dict[str, Any]] = None,
-        data: Optional[Union[dict[str, Any], str, bytes]] = None,
-        json: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        follow_redirects: bool = True,
-    ) -> "NetworkResponse":
-        raise NotImplementedError
-
-    async def set_fingerprint(self, fingerprint: "Fingerprint") -> None:
-        """Set the fingerprint for TLS/JA3 spoofing."""
-        self._fingerprint = fingerprint
-        self._headers["User-Agent"] = fingerprint.user_agent
-
-    async def set_proxy(self, proxy: str) -> None:
-        """Set the proxy for requests."""
-        self._proxy = proxy
-        self._client = None
-
-    async def set_cookies(self, cookies: dict[str, str]) -> None:
-        """Set session cookies."""
-        self._cookies.update(cookies)
-
-    async def clear_cookies(self) -> None:
-        """Clear all session cookies."""
-        self._cookies.clear()
-
-    async def close(self) -> None:
-        """Close the session."""
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+    from kuromi_browser.models import Fingerprint
 
 
 class SessionPool:
@@ -173,6 +39,14 @@ class SessionPool:
 
     Manages multiple sessions to avoid rate limiting and
     distribute load across different fingerprints.
+
+    Example:
+        pool = SessionPool(pool_size=5)
+        session = await pool.acquire()
+        try:
+            response = await session.get("https://example.com")
+        finally:
+            await pool.release(session)
     """
 
     def __init__(
@@ -180,28 +54,112 @@ class SessionPool:
         pool_size: int = 10,
         fingerprints: Optional[list["Fingerprint"]] = None,
         proxies: Optional[list[str]] = None,
+        impersonate: str = "chrome120",
     ) -> None:
+        """Initialize SessionPool.
+
+        Args:
+            pool_size: Maximum number of sessions in the pool.
+            fingerprints: Optional list of fingerprints to rotate.
+            proxies: Optional list of proxy URLs to rotate.
+            impersonate: Default browser to impersonate.
+        """
         self._pool_size = pool_size
         self._fingerprints = fingerprints or []
         self._proxies = proxies or []
+        self._impersonate = impersonate
         self._sessions: list[Session] = []
+        self._available: list[Session] = []
+        self._fingerprint_index = 0
+        self._proxy_index = 0
+
+    def _get_next_fingerprint(self) -> Optional["Fingerprint"]:
+        """Get the next fingerprint in rotation."""
+        if not self._fingerprints:
+            return None
+        fingerprint = self._fingerprints[self._fingerprint_index]
+        self._fingerprint_index = (self._fingerprint_index + 1) % len(self._fingerprints)
+        return fingerprint
+
+    def _get_next_proxy(self) -> Optional[str]:
+        """Get the next proxy in rotation."""
+        if not self._proxies:
+            return None
+        proxy = self._proxies[self._proxy_index]
+        self._proxy_index = (self._proxy_index + 1) % len(self._proxies)
+        return proxy
 
     async def acquire(self) -> Session:
-        """Get a session from the pool."""
-        raise NotImplementedError
+        """Get a session from the pool.
+
+        Creates a new session if the pool is not full and no
+        sessions are available.
+
+        Returns:
+            An available Session instance.
+        """
+        # Try to get an available session
+        if self._available:
+            return self._available.pop()
+
+        # Create new session if pool not full
+        if len(self._sessions) < self._pool_size:
+            session = Session(
+                fingerprint=self._get_next_fingerprint(),
+                proxy=self._get_next_proxy(),
+                impersonate=self._impersonate,
+            )
+            self._sessions.append(session)
+            return session
+
+        # Pool is full and no available sessions
+        # In a real implementation, this would wait for a session
+        # For now, create a temporary session
+        return Session(
+            fingerprint=self._get_next_fingerprint(),
+            proxy=self._get_next_proxy(),
+            impersonate=self._impersonate,
+        )
 
     async def release(self, session: Session) -> None:
-        """Return a session to the pool."""
-        raise NotImplementedError
+        """Return a session to the pool.
+
+        Args:
+            session: The session to return.
+        """
+        if session in self._sessions and session not in self._available:
+            self._available.append(session)
 
     async def close_all(self) -> None:
         """Close all sessions in the pool."""
         for session in self._sessions:
             await session.close()
         self._sessions.clear()
+        self._available.clear()
+
+    @property
+    def size(self) -> int:
+        """Get the current number of sessions in the pool."""
+        return len(self._sessions)
+
+    @property
+    def available_count(self) -> int:
+        """Get the number of available sessions."""
+        return len(self._available)
+
+    async def __aenter__(self) -> "SessionPool":
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit."""
+        await self.close_all()
 
 
 __all__ = [
     "Session",
     "SessionPool",
+    "Response",
+    "SessionElement",
+    "HTTPError",
 ]
