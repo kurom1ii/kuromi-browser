@@ -2,7 +2,6 @@
 AI Agent for browser automation in kuromi-browser.
 """
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
@@ -10,6 +9,33 @@ from typing import TYPE_CHECKING, Any, Optional
 from kuromi_browser.agent.actions import Action, ActionResult, ActionType
 from kuromi_browser.interfaces import BaseAgent
 from kuromi_browser.llm.base import LLMProvider
+
+# Use orjson for faster JSON parsing if available, fallback to standard json
+try:
+    import orjson
+
+    def json_loads(s: str | bytes) -> Any:
+        """Parse JSON string using orjson."""
+        if isinstance(s, str):
+            s = s.encode('utf-8')
+        return orjson.loads(s)
+
+    def json_dumps(obj: Any) -> str:
+        """Serialize object to JSON string using orjson."""
+        return orjson.dumps(obj).decode('utf-8')
+
+except ImportError:
+    import json
+
+    def json_loads(s: str | bytes) -> Any:
+        """Parse JSON string using standard json."""
+        if isinstance(s, bytes):
+            s = s.decode('utf-8')
+        return json.loads(s)
+
+    def json_dumps(obj: Any) -> str:
+        """Serialize object to JSON string using standard json."""
+        return json.dumps(obj)
 
 if TYPE_CHECKING:
     from kuromi_browser.page import Page
@@ -225,23 +251,62 @@ Respond with JSON only: {"type": "action_type", "args": {...}, "reasoning": "...
     def _parse_action_response(self, response: str) -> Action:
         """Parse LLM response into an Action.
 
+        Uses a balanced brace algorithm to correctly extract nested JSON objects.
+
         Args:
             response: Raw LLM response text.
 
         Returns:
             Parsed Action object.
         """
-        # Try to extract JSON from the response
+        # Try to find JSON by looking for balanced braces
+        start = response.find('{')
+        if start == -1:
+            return Action.fail(f"No JSON found in LLM response: {response[:100]}")
+
+        # Find matching closing brace using balanced counting
+        depth = 0
+        in_string = False
+        escape_next = False
+
+        for i, char in enumerate(response[start:], start):
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    # Found complete JSON object
+                    json_str = response[start:i + 1]
+                    try:
+                        data = json_loads(json_str)
+                        return Action.from_dict(data)
+                    except Exception:
+                        break
+
+        # Fallback: try simple regex for non-nested JSON
         try:
-            # Look for JSON in the response
             json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if json_match:
-                data = json.loads(json_match.group())
+                data = json_loads(json_match.group())
                 return Action.from_dict(data)
-        except json.JSONDecodeError:
+        except Exception:
             pass
 
-        # Fallback: create a fail action
         return Action.fail(f"Could not parse LLM response: {response[:100]}")
 
     async def _execute(self, action: Action) -> ActionResult:

@@ -7,7 +7,13 @@ that appear to come from real browsers.
 
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from curl_cffi.requests import AsyncSession as CurlAsyncSession
+# Lazy import for curl_cffi to avoid hard dependency
+try:
+    from curl_cffi.requests import AsyncSession as CurlAsyncSession
+    CURL_CFFI_AVAILABLE = True
+except ImportError:
+    CURL_CFFI_AVAILABLE = False
+    CurlAsyncSession = None  # type: ignore
 
 from kuromi_browser.session.response import Response
 
@@ -45,7 +51,16 @@ class Session:
             impersonate: Browser to impersonate (e.g., "chrome120", "firefox").
             timeout: Default request timeout in seconds.
             verify: Whether to verify SSL certificates.
+
+        Raises:
+            ImportError: If curl_cffi is not installed.
         """
+        if not CURL_CFFI_AVAILABLE:
+            raise ImportError(
+                "curl_cffi is required for HTTP session with TLS spoofing. "
+                "Install it with: pip install curl_cffi"
+            )
+
         self._fingerprint = fingerprint
         self._proxy = proxy
         self._impersonate = impersonate

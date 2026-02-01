@@ -72,6 +72,8 @@ class CDPConnection:
         self._receive_task: Optional[asyncio.Task[None]] = None
         self._connected = False
         self._closed = False
+        # Lock for thread-safe connection state management
+        self._lock = asyncio.Lock()
 
     @property
     def ws_url(self) -> str:
@@ -85,32 +87,34 @@ class CDPConnection:
 
     async def connect(self) -> None:
         """Establish WebSocket connection to CDP endpoint."""
-        if self._connected:
-            return
+        async with self._lock:
+            if self._connected:
+                return
 
-        if self._closed:
-            raise RuntimeError("Connection was closed and cannot be reused")
+            if self._closed:
+                raise RuntimeError("Connection was closed and cannot be reused")
 
-        logger.debug(f"Connecting to CDP: {self._ws_url}")
-        self._ws = await websockets.connect(
-            self._ws_url,
-            max_size=100 * 1024 * 1024,  # 100MB max message size
-            ping_interval=30,
-            ping_timeout=10,
-        )
-        self._connected = True
-        self._receive_task = asyncio.create_task(self._receive_loop())
-        logger.debug("CDP connection established")
+            logger.debug(f"Connecting to CDP: {self._ws_url}")
+            self._ws = await websockets.connect(
+                self._ws_url,
+                max_size=100 * 1024 * 1024,  # 100MB max message size
+                ping_interval=30,
+                ping_timeout=10,
+            )
+            self._connected = True
+            self._receive_task = asyncio.create_task(self._receive_loop())
+            logger.debug("CDP connection established")
 
     async def disconnect(self) -> None:
         """Close WebSocket connection."""
-        if not self._connected:
-            return
+        async with self._lock:
+            if not self._connected:
+                return
 
-        self._connected = False
-        self._closed = True
+            self._connected = False
+            self._closed = True
 
-        # Cancel receive loop
+        # Cancel receive loop (outside lock to avoid deadlock)
         if self._receive_task and not self._receive_task.done():
             self._receive_task.cancel()
             try:
@@ -128,6 +132,10 @@ class CDPConnection:
         if self._ws:
             await self._ws.close()
             self._ws = None
+
+        # Clear event handlers to prevent memory leaks
+        self._event_handlers.clear()
+        self._session_handlers.clear()
 
         logger.debug("CDP connection closed")
 
@@ -155,11 +163,13 @@ class CDPConnection:
             asyncio.TimeoutError: If the command times out.
             RuntimeError: If not connected.
         """
-        if not self._connected or self._ws is None:
-            raise RuntimeError("Not connected to CDP")
+        # Check connection state with lock
+        async with self._lock:
+            if not self._connected or self._ws is None:
+                raise RuntimeError("Not connected to CDP")
 
-        self._message_id += 1
-        message_id = self._message_id
+            self._message_id += 1
+            message_id = self._message_id
 
         message: dict[str, Any] = {
             "id": message_id,
