@@ -9,6 +9,7 @@ This module provides anti-detection and fingerprint spoofing capabilities:
 - TLSClient: TLS fingerprint impersonation using curl_cffi
 
 Enhanced with techniques from:
+- Patchright: Runtime.enable leak fix, Input leak fix, Chrome stealth args
 - my-fingerprint: WebRTC, WebGPU, DomRect, Font, UserAgentData patches
 - browserforge: Bayesian network fingerprint generation, codec spoofing
 - camoufox: Advanced stealth techniques and consistency validation
@@ -20,6 +21,13 @@ from kuromi_browser.models import Fingerprint
 
 # Import submodules
 from kuromi_browser.stealth.cdp import CDPPatches
+from kuromi_browser.stealth.cdp.patches import (
+    get_stealth_chromium_args,
+    filter_automation_args,
+    CHROMIUM_STEALTH_ARGS,
+    CHROMIUM_ARGS_TO_REMOVE,
+    CHROMIUM_DISABLED_FEATURES,
+)
 from kuromi_browser.stealth.fingerprint import (
     FingerprintGenerator,
     SCREEN_RESOLUTIONS,
@@ -244,6 +252,12 @@ __all__ = [
     "FingerprintGenerator",
     # CDP Patches
     "CDPPatches",
+    # Patchright stealth utilities
+    "get_stealth_chromium_args",
+    "filter_automation_args",
+    "CHROMIUM_STEALTH_ARGS",
+    "CHROMIUM_ARGS_TO_REMOVE",
+    "CHROMIUM_DISABLED_FEATURES",
     # Behavior simulation (optional)
     "HumanMouse",
     "MousePath",

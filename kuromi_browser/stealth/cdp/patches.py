@@ -1015,12 +1015,217 @@ TOSTRING_PROTECTION_PATCH = """
 })();
 """
 
+# ============================================================================
+# PATCHRIGHT TECHNIQUES - Input Leak Patches
+# ============================================================================
+
+# CDP Input Event Leak Fix (from Patchright/CDP-Patches research)
+# CDP input events have pageX == screenX and pageY == screenY which is detectable.
+# Real browsers have offset due to browser chrome (toolbar, address bar, etc.)
+# This patch intercepts input events and fixes the coordinates.
+INPUT_LEAK_FIX_PATCH = """
+((chromeOffsetX, chromeOffsetY, jitter) => {
+    const seededRandom = (seed) => {
+        const x = Math.sin(seed) * 10000;
+        return x - Math.floor(x);
+    };
+
+    // Fix for mouse and pointer events - screenX/screenY should differ from pageX/pageY
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    const inputEvents = [
+        // Mouse events
+        'click', 'mousedown', 'mouseup', 'mousemove', 'mouseenter', 'mouseleave', 'mouseover', 'mouseout',
+        // Pointer events (also have screenX/screenY)
+        'pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'pointerover', 'pointerout'
+    ];
+    EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (inputEvents.includes(type)) {
+            const wrappedListener = function(event) {
+                // If screenX equals pageX (CDP leak), add browser chrome offset
+                if (event.screenX === event.pageX && event.screenY === event.pageY) {
+                    const jitterX = Math.floor(seededRandom(event.timeStamp) * jitter * 2) - jitter;
+                    const jitterY = Math.floor(seededRandom(event.timeStamp + 1) * jitter * 2) - jitter;
+
+                    Object.defineProperties(event, {
+                        screenX: { value: event.pageX + chromeOffsetX + jitterX, configurable: true },
+                        screenY: { value: event.pageY + chromeOffsetY + jitterY, configurable: true }
+                    });
+                }
+                return listener.call(this, event);
+            };
+            return originalAddEventListener.call(this, type, wrappedListener, options);
+        }
+        return originalAddEventListener.call(this, type, listener, options);
+    };
+
+    // Wrap window event properties
+    ['onclick', 'onmousedown', 'onmouseup', 'onmousemove'].forEach(eventProp => {
+        const originalGetter = Object.getOwnPropertyDescriptor(Window.prototype, eventProp)?.get;
+        const originalSetter = Object.getOwnPropertyDescriptor(Window.prototype, eventProp)?.set;
+
+        if (originalSetter) {
+            Object.defineProperty(window, eventProp, {
+                get: originalGetter,
+                set: function(handler) {
+                    if (typeof handler === 'function') {
+                        const wrappedHandler = function(event) {
+                            if (event.screenX === event.pageX && event.screenY === event.pageY) {
+                                const jitterX = Math.floor(seededRandom(event.timeStamp) * jitter * 2) - jitter;
+                                const jitterY = Math.floor(seededRandom(event.timeStamp + 1) * jitter * 2) - jitter;
+
+                                Object.defineProperties(event, {
+                                    screenX: { value: event.pageX + chromeOffsetX + jitterX, configurable: true },
+                                    screenY: { value: event.pageY + chromeOffsetY + jitterY, configurable: true }
+                                });
+                            }
+                            return handler.call(this, event);
+                        };
+                        return originalSetter.call(this, wrappedHandler);
+                    }
+                    return originalSetter.call(this, handler);
+                },
+                configurable: true
+            });
+        }
+    });
+})({chrome_offset_x}, {chrome_offset_y}, {jitter});
+"""
+
+# CoalescedEvents Emulation (from Patchright/CDP-Patches)
+# CDP can't dispatch CoalescedEvents, which is detectable
+# This patch adds fake coalesced events to make the browser look more natural
+COALESCED_EVENTS_PATCH = """
+(() => {
+    // Add getCoalescedEvents method to PointerEvent if it doesn't return proper data
+    const originalGetCoalescedEvents = PointerEvent.prototype.getCoalescedEvents;
+
+    PointerEvent.prototype.getCoalescedEvents = function() {
+        const result = originalGetCoalescedEvents ? originalGetCoalescedEvents.call(this) : [];
+
+        // If result is empty (CDP behavior), return array with current event
+        if (!result || result.length === 0) {
+            // Create a minimal coalesced event representation
+            return [this];
+        }
+        return result;
+    };
+
+    // Also ensure getPredictedEvents returns something reasonable
+    if (!PointerEvent.prototype.getPredictedEvents) {
+        PointerEvent.prototype.getPredictedEvents = function() {
+            return [];  // Predicted events are optional
+        };
+    }
+})();
+"""
+
+# Chromium Stealth Args Configuration (from Patchright)
+# These are the recommended Chrome flags to avoid detection
+CHROMIUM_STEALTH_ARGS = [
+    "--disable-blink-features=AutomationControlled",  # Critical - hides navigator.webdriver
+    # Removed from Playwright defaults by Patchright:
+    # "--enable-automation" (removed)
+    # "--disable-popup-blocking" (removed)
+    # "--disable-component-update" (removed)
+    # "--disable-default-apps" (removed)
+    # "--disable-extensions" (removed)
+]
+
+# Chrome flags to avoid (these reveal automation)
+CHROMIUM_ARGS_TO_REMOVE = [
+    "--enable-automation",
+    "--disable-popup-blocking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--allow-pre-commit-input",
+    "--disable-ipc-flooding-protection",
+    "--metrics-recording-only",
+    "--unsafely-disable-devtools-self-xss-warnings",
+    "--disable-back-forward-cache",
+]
+
+# Disabled features to avoid detection (from Patchright)
+CHROMIUM_DISABLED_FEATURES = [
+    "ImprovedCookieControls",
+    "LazyFrameLoading",
+    "GlobalMediaControls",
+    "DestroyProfileOnBrowserClose",
+    "MediaRouter",
+    "DialMediaRouteProvider",
+    "AcceptCHFrame",
+    "AutoExpandDetailsElement",
+    "CertificateTransparencyComponentUpdater",
+    "AvoidUnnecessaryBeforeUnloadCheckSync",
+    "Translate",
+    "HttpsUpgrades",
+    "PaintHolding",
+    "ThirdPartyStoragePartitioning",
+    "LensOverlay",
+    "PlzDedicatedWorker",
+]
+
+
+def get_stealth_chromium_args(
+    additional_args: list[str] | None = None,
+    remove_args: list[str] | None = None,
+) -> list[str]:
+    """Get recommended Chromium args for stealth operation.
+
+    Based on Patchright research, these flags help avoid bot detection.
+
+    Args:
+        additional_args: Extra args to add
+        remove_args: Args to filter out from defaults
+
+    Returns:
+        List of Chrome command line arguments for stealth mode.
+    """
+    args = list(CHROMIUM_STEALTH_ARGS)
+
+    # Add disabled features flag
+    disabled_features = ",".join(CHROMIUM_DISABLED_FEATURES)
+    args.append(f"--disable-features={disabled_features}")
+
+    if additional_args:
+        args.extend(additional_args)
+
+    if remove_args:
+        args = [a for a in args if a not in remove_args]
+
+    return args
+
+
+def filter_automation_args(args: list[str]) -> list[str]:
+    """Remove automation-revealing args from a list.
+
+    Args:
+        args: Original Chrome args list
+
+    Returns:
+        Filtered args with automation indicators removed.
+    """
+    filtered = []
+    for arg in args:
+        # Check if arg matches any pattern to remove
+        should_remove = False
+        for remove_arg in CHROMIUM_ARGS_TO_REMOVE:
+            if arg == remove_arg or arg.startswith(f"{remove_arg}="):
+                should_remove = True
+                break
+        if not should_remove:
+            filtered.append(arg)
+    return filtered
+
 
 class CDPPatches:
     """CDP patches for hiding browser automation indicators.
 
-    Enhanced with techniques from my-fingerprint, browserforge, and camoufox.
-    Supports: WebRTC, WebGPU, DomRect, Font, UserAgentData, Battery, Codecs.
+    Enhanced with techniques from Patchright, my-fingerprint, browserforge, and camoufox.
+    Supports: WebRTC, WebGPU, DomRect, Font, UserAgentData, Battery, Codecs,
+    Input Leaks, CoalescedEvents.
     """
 
     def __init__(self, fingerprint: Optional[Fingerprint] = None) -> None:
@@ -1198,12 +1403,37 @@ class CDPPatches:
                 .replace("{audio_codecs}", json.dumps(fp.audio_codecs))
             )
 
+            # ========== PATCHRIGHT TECHNIQUES ==========
+
+            # Input Leak Fix (from Patchright/CDP-Patches)
+            if hasattr(fp, 'input_leak') and fp.input_leak.enabled:
+                patches.append(
+                    INPUT_LEAK_FIX_PATCH
+                    .replace("{chrome_offset_x}", str(fp.input_leak.chrome_offset_x))
+                    .replace("{chrome_offset_y}", str(fp.input_leak.chrome_offset_y))
+                    .replace("{jitter}", str(fp.input_leak.offset_jitter))
+                )
+
+            # CoalescedEvents Emulation (from Patchright)
+            patches.append(COALESCED_EVENTS_PATCH)
+
         else:
             # Default patches without fingerprint
             patches.append(LANGUAGES_PATCH)
             patches.append(HARDWARE_CONCURRENCY_PATCH.replace("{concurrency}", "8"))
             patches.append(DEVICE_MEMORY_PATCH.replace("{memory}", "8"))
             patches.append(WEBRTC_DISABLE_PATCH)  # Block WebRTC by default
+
+            # Add default Input Leak Fix
+            patches.append(
+                INPUT_LEAK_FIX_PATCH
+                .replace("{chrome_offset_x}", "0")
+                .replace("{chrome_offset_y}", "85")
+                .replace("{jitter}", "2")
+            )
+
+            # CoalescedEvents
+            patches.append(COALESCED_EVENTS_PATCH)
 
         return patches
 
@@ -1235,3 +1465,27 @@ class CDPPatches:
             "Page.addScriptToEvaluateOnNewDocument",
             {"source": combined}
         )
+
+
+__all__ = [
+    "CDPPatches",
+    "get_stealth_chromium_args",
+    "filter_automation_args",
+    "CHROMIUM_STEALTH_ARGS",
+    "CHROMIUM_ARGS_TO_REMOVE",
+    "CHROMIUM_DISABLED_FEATURES",
+    # Individual patches for advanced usage
+    "WEBDRIVER_PATCH",
+    "CHROME_PATCHES",
+    "PERMISSIONS_PATCH",
+    "PLUGINS_PATCH",
+    "CANVAS_NOISE_PATCH",
+    "AUDIO_NOISE_PATCH",
+    "WEBGL_PATCH",
+    "WEBRTC_DISABLE_PATCH",
+    "WEBGPU_NOISE_PATCH",
+    "DOMRECT_NOISE_PATCH",
+    "FONT_NOISE_PATCH",
+    "INPUT_LEAK_FIX_PATCH",
+    "COALESCED_EVENTS_PATCH",
+]

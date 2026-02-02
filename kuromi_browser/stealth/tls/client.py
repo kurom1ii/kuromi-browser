@@ -11,12 +11,10 @@ from enum import Enum
 from typing import Any, Optional, Union
 
 try:
-    from curl_cffi import requests as curl_requests
     from curl_cffi.requests import Session as CurlSession
     CURL_CFFI_AVAILABLE = True
 except ImportError:
     CURL_CFFI_AVAILABLE = False
-    curl_requests = None
     CurlSession = None
 
 

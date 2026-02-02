@@ -20,10 +20,7 @@ from mcp.types import (
     TextContent,
     ImageContent,
     Tool,
-    INVALID_PARAMS,
-    INTERNAL_ERROR,
 )
-from pydantic import AnyUrl
 
 from kuromi_browser.models import (
     BrowserConfig,

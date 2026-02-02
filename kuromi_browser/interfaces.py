@@ -21,8 +21,6 @@ if TYPE_CHECKING:
     from kuromi_browser.models import (
         BrowserConfig,
         Cookie,
-        DialogInfo,
-        ElementHandle,
         Fingerprint,
         FrameInfo,
         NetworkRequest,

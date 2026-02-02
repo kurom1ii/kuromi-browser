@@ -9,7 +9,6 @@ from these classes for consistent behavior.
 from abc import ABC, abstractmethod
 import asyncio
 import time
-import weakref
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -19,7 +18,6 @@ from typing import (
     Optional,
     TypeVar,
     Union,
-    overload,
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field

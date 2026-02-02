@@ -7,9 +7,66 @@ Huong dan su dung cac tinh nang anti-detection trong Kuromi Browser.
 Kuromi Browser cung cap nhieu lop anti-detection de giup browser automation tranh bi phat hien:
 
 1. **CDP Patches** - Patch cac API ma bot detectors kiem tra
-2. **Fingerprint Spoofing** - Gia lap fingerprint browser thuc
-3. **TLS Impersonation** - Gia lap TLS/JA3 fingerprint
-4. **Human-like Behavior** - Mo phong hanh vi nguoi dung
+2. **Patchright Techniques** - Input leak fix, Chrome stealth args
+3. **Fingerprint Spoofing** - Gia lap fingerprint browser thuc
+4. **TLS Impersonation** - Gia lap TLS/JA3 fingerprint
+5. **Human-like Behavior** - Mo phong hanh vi nguoi dung
+
+## Patchright Integration (NEW)
+
+Kuromi Browser tich hop cac ky thuat tu [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) - phien ban Playwright undetected.
+
+### Input Leak Fix
+
+CDP input events co `pageX == screenX` - dieu nay khong xay ra voi browser thuc vi co offset tu toolbar. Patch nay sua loi do:
+
+```python
+from kuromi_browser.models import Fingerprint
+
+fp = Fingerprint()
+# Input leak protection mac dinh enabled
+print(fp.input_leak.enabled)  # True
+print(fp.input_leak.chrome_offset_y)  # 85 (toolbar height)
+```
+
+### Chrome Stealth Args
+
+Su dung recommended Chrome flags de tranh detection:
+
+```python
+from kuromi_browser.stealth import (
+    get_stealth_chromium_args,
+    filter_automation_args,
+    CHROMIUM_STEALTH_ARGS,
+    CHROMIUM_ARGS_TO_REMOVE,
+)
+
+# Lay recommended args
+args = get_stealth_chromium_args()
+# ['--disable-blink-features=AutomationControlled', ...]
+
+# Loc bo automation-revealing args
+clean_args = filter_automation_args(your_args)
+```
+
+### Cac Args Quan Trong
+
+**Them vao:**
+- `--disable-blink-features=AutomationControlled` - Critical, an navigator.webdriver
+
+**Loai bo:**
+- `--enable-automation` - Lo navigator.webdriver
+- `--disable-popup-blocking` - Unusual behavior
+- `--disable-component-update` - Detection as stealth driver
+- `--disable-extensions` - Unusual for real browser
+
+### CoalescedEvents Emulation
+
+CDP khong dispatch CoalescedEvents. Patch nay emulate de tranh detection:
+
+```python
+from kuromi_browser.stealth.cdp.patches import COALESCED_EVENTS_PATCH
+```
 
 ## CDP Patches
 

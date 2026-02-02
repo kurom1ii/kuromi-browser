@@ -11,7 +11,7 @@ import atexit
 import functools
 import sys
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,7 +21,6 @@ from typing import (
     Optional,
     TypeVar,
     Union,
-    overload,
 )
 
 if TYPE_CHECKING:

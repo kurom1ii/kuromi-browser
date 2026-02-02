@@ -184,6 +184,37 @@ class CanvasProperties(BaseModel):
     noise_level: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
+class InputLeakProperties(BaseModel):
+    """Input leak protection settings (from Patchright/CDP-Patches).
+
+    CDP input events have pageX == screenX which is detectable.
+    Real browsers have offset due to browser chrome (toolbar, address bar, etc.)
+    """
+
+    enabled: bool = True
+    # Browser chrome offset (toolbar, address bar height)
+    chrome_offset_y: int = Field(default=85, ge=0, le=200)  # Typical Chrome toolbar height
+    chrome_offset_x: int = Field(default=0, ge=0, le=50)
+    # Random variation to add to offsets
+    offset_jitter: int = Field(default=2, ge=0, le=10)
+
+
+class CDPStealthMode(BaseModel):
+    """CDP stealth configuration (from Patchright research).
+
+    Controls which CDP domains to enable/disable to avoid detection.
+    """
+
+    # Avoid Runtime.enable leak - biggest detection vector
+    avoid_runtime_enable: bool = True
+    # Disable Console API to avoid Console.enable leak
+    disable_console: bool = False
+    # Use isolated execution contexts instead of main context
+    use_isolated_contexts: bool = True
+    # Focus control - allow pages to be focused properly
+    focus_control: bool = True
+
+
 class Fingerprint(BaseModel):
     """Complete browser fingerprint profile.
 
@@ -257,6 +288,12 @@ class Fingerprint(BaseModel):
         "ogg": "probably",
         "wav": "probably",
     })
+
+    # Input leak protection (from Patchright/CDP-Patches)
+    input_leak: InputLeakProperties = Field(default_factory=InputLeakProperties)
+
+    # CDP stealth mode (from Patchright research)
+    cdp_stealth: CDPStealthMode = Field(default_factory=CDPStealthMode)
 
     @property
     def platform(self) -> str:
